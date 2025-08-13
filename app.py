@@ -641,6 +641,38 @@ def render_records(
             else:
                 st.info("No PointsAgainst column found.")
 
+            # Best offense/defense by PPG and best differential (per season)
+            if {"PointsFor", "PointsAgainst", "GP"}.issubset(reg.columns) and (reg["GP"] > 0).any():
+                reg_pp = reg.copy()
+                with np.errstate(divide='ignore', invalid='ignore'):
+                    reg_pp["PPG F"] = np.where(reg_pp["GP"] > 0, reg_pp["PointsFor"] / reg_pp["GP"], np.nan)
+                    reg_pp["PPG A"] = np.where(reg_pp["GP"] > 0, reg_pp["PointsAgainst"] / reg_pp["GP"], np.nan)
+                    reg_pp["PPG Diff"] = np.where(reg_pp["GP"] > 0, (reg_pp["PointsFor"] - reg_pp["PointsAgainst"]) / reg_pp["GP"], np.nan)
+
+                # Best offense (highest PPG F)
+                best_off = reg_pp.sort_values(["PPG F"], ascending=False).head(10)
+                if not best_off.empty:
+                    df_off = best_off.rename(columns={"TeamName": "Team"}).copy()
+                    df_off["PPG F"] = df_off["PPG F"].round(2)
+                    st.markdown("**Top 10 Best Offense (PPG For) — Season**")
+                    st.dataframe(df_off[[c for c in ["Year", "Team", "Owner", "GP", "PPG F"] if c in df_off.columns]], use_container_width=True)
+
+                # Best defense (lowest PPG A)
+                best_def = reg_pp.sort_values(["PPG A"], ascending=True).head(10)
+                if not best_def.empty:
+                    df_def = best_def.rename(columns={"TeamName": "Team"}).copy()
+                    df_def["PPG A"] = df_def["PPG A"].round(2)
+                    st.markdown("**Top 10 Best Defense (Lowest PPG Against) — Season**")
+                    st.dataframe(df_def[[c for c in ["Year", "Team", "Owner", "GP", "PPG A"] if c in df_def.columns]], use_container_width=True)
+
+                # Best differential (PPG F − PPG A)
+                best_diff = reg_pp.sort_values(["PPG Diff"], ascending=False).head(10)
+                if not best_diff.empty:
+                    df_diff = best_diff.rename(columns={"TeamName": "Team"}).copy()
+                    df_diff["PPG Diff"] = df_diff["PPG Diff"].round(2)
+                    st.markdown("**Top 10 Best Points Differential per Game — Season**")
+                    st.dataframe(df_diff[[c for c in ["Year", "Team", "Owner", "GP", "PPG Diff"] if c in df_diff.columns]], use_container_width=True)
+
     st.subheader("Game Records")
     if df_gl is None or df_gl.empty:
         st.info("No game log data available.")
@@ -746,6 +778,79 @@ def render_records(
         if not narrow.empty:
             st.markdown("**Top 10 Narrowest Win Margins (Game)**")
             st.dataframe(narrow[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in narrow.columns]], use_container_width=True)
+
+        # Highest losing score (team still lost)
+        gl["LosingPoints"] = np.where(gl["HomeScore"] > gl["AwayScore"], gl["AwayScore"], np.where(gl["AwayScore"] > gl["HomeScore"], gl["HomeScore"], np.nan))
+        gl["LosingTeamDisp"] = np.where(
+            gl["HomeScore"] > gl["AwayScore"], gl["AwayTeam"].astype(str) + " (" + gl["AwayOwner"].astype(str) + ")",
+            np.where(gl["AwayScore"] > gl["HomeScore"], gl["HomeTeam"].astype(str) + " (" + gl["HomeOwner"].astype(str) + ")", np.nan),
+        )
+        losing_tbl = pd.concat([base_cols[[c for c in ["Year", "Week", "Home", "Away", "Score"] if c in base_cols.columns]], gl[["LosingTeamDisp", "LosingPoints"]]], axis=1)
+        losing_tbl = losing_tbl.dropna(subset=["LosingPoints"]).sort_values("LosingPoints", ascending=False).head(10)
+        if not losing_tbl.empty:
+            st.markdown("**Top 10 Highest Scoring Losing Teams (Game)**")
+            lt = losing_tbl.rename(columns={"LosingTeamDisp": "Team (Owner)", "LosingPoints": "Points"})
+            st.dataframe(lt[[c for c in ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"] if c in lt.columns]], use_container_width=True)
+
+        # Lowest winning score (team still won)
+        gl["WinningPoints"] = np.where(gl["HomeScore"] > gl["AwayScore"], gl["HomeScore"], np.where(gl["AwayScore"] > gl["HomeScore"], gl["AwayScore"], np.nan))
+        gl["WinningTeamDisp"] = np.where(
+            gl["HomeScore"] > gl["AwayScore"], gl["HomeTeam"].astype(str) + " (" + gl["HomeOwner"].astype(str) + ")",
+            np.where(gl["AwayScore"] > gl["HomeScore"], gl["AwayTeam"].astype(str) + " (" + gl["AwayOwner"].astype(str) + ")", np.nan),
+        )
+        winning_tbl = pd.concat([base_cols[[c for c in ["Year", "Week", "Home", "Away", "Score"] if c in base_cols.columns]], gl[["WinningTeamDisp", "WinningPoints"]]], axis=1)
+        winning_tbl = winning_tbl.dropna(subset=["WinningPoints"]).sort_values("WinningPoints", ascending=True).head(10)
+        if not winning_tbl.empty:
+            st.markdown("**Top 10 Lowest Winning Scores (Game)**")
+            wt = winning_tbl.rename(columns={"WinningTeamDisp": "Team (Owner)", "WinningPoints": "Points"})
+            st.dataframe(wt[[c for c in ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"] if c in wt.columns]], use_container_width=True)
+
+        # Longest win streak by owner (overall)
+        try:
+            # Two-row per game: owner + result
+            a = pd.DataFrame({
+                "Owner": gl.get("HomeOwner"),
+                "Year": gl.get("Year"),
+                "Week": gl.get("Week"),
+                "Win": gl.get("HomeScore") > gl.get("AwayScore"),
+            })
+            b = pd.DataFrame({
+                "Owner": gl.get("AwayOwner"),
+                "Year": gl.get("Year"),
+                "Week": gl.get("Week"),
+                "Win": gl.get("AwayScore") > gl.get("HomeScore"),
+            })
+            long = pd.concat([a, b], ignore_index=True)
+            long["Year"] = pd.to_numeric(long["Year"], errors="coerce")
+            long["Week"] = pd.to_numeric(long["Week"], errors="coerce")
+            long = long.dropna(subset=["Owner", "Year", "Week"])  # keep valid rows only
+            long = long.sort_values(["Owner", "Year", "Week"])  # chronological
+
+            # Compute run-lengths of consecutive wins per owner
+            def _streaks(g: pd.DataFrame) -> pd.DataFrame:
+                s = g["Win"].astype(bool)
+                # Identify segments where Win value changes
+                grp = (s != s.shift()).cumsum()
+                out = g.copy()
+                out["seg"] = grp
+                out["is_win_seg"] = s
+                return out
+
+            seg = long.groupby("Owner", group_keys=False).apply(_streaks)
+            win_segs = seg[seg["is_win_seg"]]
+            agg = win_segs.groupby(["Owner", "seg"]).agg(
+                Streak=("Win", "size"),
+                StartYear=("Year", "first"),
+                StartWeek=("Week", "first"),
+                EndYear=("Year", "last"),
+                EndWeek=("Week", "last"),
+            ).reset_index(drop=False)
+            top_streaks = agg.sort_values(["Streak"], ascending=False).head(10)
+            if not top_streaks.empty:
+                st.markdown("**Top 10 Longest Win Streaks (Owner)**")
+                st.dataframe(top_streaks[["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"]], use_container_width=True)
+        except Exception:
+            pass
 
 
 def apply_year_team_owner_filters(

@@ -618,7 +618,7 @@ def compute_winner_team(df_gl: pd.DataFrame) -> pd.DataFrame:
 
 
 def _render_records_table(title: str, df: pd.DataFrame, columns: List[str]) -> None:
-    """Render a compact, styled table using existing CSS (standings-wrap/table-modern)."""
+    """Render a simple Streamlit dataframe instead of custom HTML tables."""
     if df is None or df.empty:
         st.info("No data to display.")
         return
@@ -639,16 +639,8 @@ def _render_records_table(title: str, df: pd.DataFrame, columns: List[str]) -> N
         elif pd.api.types.is_float_dtype(d[c]):
             d[c] = d[c].round(2)
 
-    html_table = d.to_html(index=False, classes="table-modern", border=0, justify="left")
-    st.markdown(
-        f"""
-        <div class="standings-wrap">
-            <div class="standings-title">{title}</div>
-            {html_table}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(f"#### {title}")
+    st.dataframe(d, use_container_width=True)
 
 
 def render_records(
@@ -1560,70 +1552,10 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
                     elif "Wins" in reg_latest.columns:
                         reg_latest = reg_latest.sort_values(["Wins", "PointsFor" if "PointsFor" in reg_latest.columns else "TeamName"], ascending=[False, False])
 
-                    # Build custom HTML table
-                    cols = {
-                        "Seed": "Seed",
-                        "TeamName": "Team",
-                        "Owner": "Owner",
-                        "Wins": "W",
-                        "Losses": "L",
-                        "T": "T",
-                        "Pct": "Pct",
-                    }
-                    available = [src for src in cols.keys() if src in reg_latest.columns]
-                    html = [
-                        "<div class='standings-wrap'>",
-                        "<div class='standings-title'>📊 Standings</div>",
-                        "<table class='table-modern'>",
-                        "<thead><tr>",
-                    ]
-                    for k in available:
-                        title = cols[k]
-                        align = "right" if title in ["W", "L", "T", "Pct"] else "left"
-                        html.append(f"<th style='text-align:{align};'>{title}</th>")
-                    html.append("</tr></thead><tbody>")
-
-                    def seed_badge(val):
-                        if pd.isna(val):
-                            return ""
-                        v = int(val)
-                        cls = "seed-badge"
-                        if v == 1:
-                            cls += " seed-1"
-                        elif v == 2:
-                            cls += " seed-2"
-                        elif v == 3:
-                            cls += " seed-3"
-                        return f"<span class='{cls}'>{v}</span>"
-
-                    for _, r in reg_latest.iterrows():
-                        html.append("<tr>")
-                        for k in available:
-                            if k == "Seed":
-                                cell = seed_badge(r.get(k))
-                                html.append(f"<td>{cell}</td>")
-                            elif k == "TeamName":
-                                team = str(r.get(k) or "")
-                                owner = str(r.get("Owner") or "")
-                                cell = (
-                                    f"<div class='team-info'><div class='team-name'>{team}</div>"
-                                    f"<div class='owner-sub'>{owner}</div></div>"
-                                )
-                                html.append(f"<td>{cell}</td>")
-                            elif k in ["Wins", "Losses", "T"]:
-                                val = r.get(k)
-                                html.append(
-                                    f"<td class='wl' style='text-align:right;'>{'' if pd.isna(val) else int(val)}</td>"
-                                )
-                            elif k == "Pct":
-                                val = r.get(k)
-                                pct = f"{val:.3f}" if pd.notna(val) else ""
-                                html.append(f"<td class='pct' style='text-align:right;'>{pct}</td>")
-                            else:
-                                html.append(f"<td>{r.get(k) if pd.notna(r.get(k)) else ''}</td>")
-                        html.append("</tr>")
-                    html.append("</tbody></table></div>")
-                    st.markdown("".join(html), unsafe_allow_html=True)
+                    # Show as standard dataframe
+                    disp_cols = [c for c in ["Seed","TeamName","Owner","Wins","Losses","T","Pct"] if c in reg_latest.columns]
+                    df_disp = reg_latest[disp_cols].rename(columns={"TeamName":"Team","Wins":"W","Losses":"L"}).copy()
+                    st.dataframe(df_disp, use_container_width=True)
                 else:
                     st.info("No regular season standings found for the latest season.")
             else:
@@ -1707,39 +1639,9 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
     st.markdown("#### Finals appearances and results by owner")
     finals_summary = owner_finals_summary(df_ch_f, df_gl_f)
     if finals_summary is not None and not finals_summary.empty:
-        # Build a modern HTML table (no fixed height) with badges for types
         fs = finals_summary.copy()
-        fs_cols = [c for c in ["Owner", "Week", "Appearances", "Wins", "Losses"] if c in fs.columns]
-        # Map week label to badge class
-        def week_badge(w: str) -> str:
-            w_str = str(w or "")
-            cls = "type-badge gf" if "grand" in w_str.lower() else ("type-badge tb" if "toilet" in w_str.lower() else "type-badge")
-            return f"<span class='{cls}'>{w_str}</span>"
-
-        html = [
-            "<div class='standings-wrap'>",
-            "<div class='standings-title'>🏅 Finals Summary</div>",
-            "<table class='table-modern'>",
-            "<thead><tr>",
-        ]
-        for c in fs_cols:
-            align = "right" if c in ["Appearances", "Wins", "Losses"] else "left"
-            html.append(f"<th style='text-align:{align};'>{c}</th>")
-        html.append("</tr></thead><tbody>")
-        for _, r in fs.iterrows():
-            html.append("<tr>")
-            for c in fs_cols:
-                if c == "Week":
-                    cell = week_badge(r.get(c))
-                    html.append(f"<td>{cell}</td>")
-                elif c in ["Appearances", "Wins", "Losses"]:
-                    val = r.get(c)
-                    html.append(f"<td class='wl' style='text-align:right;'>{'' if pd.isna(val) else int(val)}</td>")
-                else:
-                    html.append(f"<td>{'' if pd.isna(r.get(c)) else r.get(c)}</td>")
-            html.append("</tr>")
-        html.append("</tbody></table></div>")
-        st.markdown("".join(html), unsafe_allow_html=True)
+        cols = [c for c in ["Owner", "Week", "Appearances", "Wins", "Losses"] if c in fs.columns]
+        st.dataframe(fs[cols], use_container_width=True)
     else:
         st.info("No finals data found in championships sheet to build owner summary.")
 
@@ -3397,49 +3299,12 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         rank_deltas.append(prev_rank - curr_rank if pd.notna(prev_rank) and pd.notna(curr_rank) else np.nan)
     top12["EloDelta"] = elo_deltas
     top12["RankDelta"] = rank_deltas
-    # Build modern table HTML (full width)
-    html = [
-        "<div class='standings-wrap'>",
-        "<div class='standings-title'>🏅 Elo Leaderboard</div>",
-        "<table class='table-modern'>",
-        "<thead><tr>",
-        "<th>Rank</th><th>Owner</th><th style='text-align:right;'>Elo</th><th style='text-align:right;'>Games</th><th style='text-align:right;'>W</th><th style='text-align:right;'>L</th><th style='text-align:right;'>T</th><th style='text-align:right;'>Win%</th>",
-        "</tr></thead><tbody>",
+    # Show as standard dataframe for better mobile behavior
+    cols = [
+        c for c in ["Rank","Owner","Elo","Games","Wins","Losses","Ties","WinPct","RankDelta","EloDelta"]
+        if c in top12.columns
     ]
-    def _rank_arrow(val: float) -> str:
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return f" <span style='color:#2e7d32;font-size:0.85em;'>▲+{int(val)}</span>"
-        if val < 0:
-            return f" <span style='color:#c62828;font-size:0.85em;'>▼{int(abs(val))}</span>"
-        return " <span style='color:#6b7280;font-size:0.85em;'>•</span>"
-
-    def _elo_arrow(val: float) -> str:
-        if pd.isna(val):
-            return ""
-        if val > 0:
-            return f" <span style='color:#2e7d32;font-size:0.85em;'>+{int(round(val))}</span>"
-        if val < 0:
-            return f" <span style='color:#c62828;font-size:0.85em;'>-{int(round(abs(val)))}</span>"
-        return " <span style='color:#6b7280;font-size:0.85em;'>0</span>"
-
-    for _, r in top12.iterrows():
-        html.append("<tr>")
-        rank_cell = f"{int(r['Rank'])}" + _rank_arrow(r.get("RankDelta"))
-        html.append(f"<td>{rank_cell}</td>")
-        html.append(f"<td>{r['Owner']}</td>")
-        elo_cell = f"{int(round(r['Elo']))}" + _elo_arrow(r.get("EloDelta"))
-        html.append(f"<td class='wl' style='text-align:right;'>{elo_cell}</td>")
-        html.append(f"<td class='wl' style='text-align:right;'>{int(r['Games'])}</td>")
-        html.append(f"<td class='wl' style='text-align:right;'>{int(r['Wins'])}</td>")
-        html.append(f"<td class='wl' style='text-align:right;'>{int(r['Losses'])}</td>")
-        html.append(f"<td class='wl' style='text-align:right;'>{int(r['Ties'])}</td>")
-        wp = ("" if pd.isna(r["WinPct"]) else f"{r['WinPct']:.3f}")
-        html.append(f"<td class='pct' style='text-align:right;'>{wp}</td>")
-        html.append("</tr>")
-    html.append("</tbody></table></div>")
-    st.markdown("".join(html), unsafe_allow_html=True)
+    st.dataframe(top12[cols], use_container_width=True)
 
     # Timeline chart for selected entries
     st.markdown("### Rating timeline")

@@ -3730,16 +3730,7 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         details["_Y"] = pd.to_numeric(details["Year"], errors="coerce")
         details["_W"] = pd.to_numeric(details["Week"], errors="coerce")
         details = details.sort_values(["_Y", "_W"]).drop(columns=["_Y", "_W"], errors="ignore")
-    _render_records_table(
-        "Elo Match Details",
-        details,
-        [
-            c for c in [
-                "Year", "Week", "HomeOwner", "AwayOwner", "HomeScore", "AwayScore",
-                "Winner", "Margin", "HomeEloBefore", "AwayEloBefore", "HomeEloAfter", "AwayEloAfter"
-            ] if c in details.columns
-        ],
-    )
+    st.dataframe(details, use_container_width=True)
 
 
 def main():

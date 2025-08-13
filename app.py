@@ -3718,19 +3718,6 @@ def main():
 
     # Ensure the data file exists in deployments
     _ensure_data_file(DEFAULT_FILE_PATH)
-    try:
-        size = os.path.getsize(DEFAULT_FILE_PATH) if os.path.exists(DEFAULT_FILE_PATH) else 0
-        valid_zip = zipfile.is_zipfile(DEFAULT_FILE_PATH) if size else False
-        st.caption(f"Data file check: size={size} bytes, zip={valid_zip}")
-        # List workbook sheets to verify content in Cloud
-        if size and valid_zip:
-            try:
-                xls = pd.ExcelFile(DEFAULT_FILE_PATH, engine="openpyxl")
-                st.caption("Workbook sheets: " + ", ".join(xls.sheet_names))
-            except Exception as e:
-                st.caption(f"Workbook open error: {e}")
-    except Exception:
-        pass
 
     # Compute a file signature to bust cache when the Excel changes
     _sig = _file_signature(DEFAULT_FILE_PATH)
@@ -3740,16 +3727,7 @@ def main():
     df_draft = load_sheet(DEFAULT_FILE_PATH, "draft", file_sig=_sig)
     df_gl = load_sheet(DEFAULT_FILE_PATH, "gamelog", file_sig=_sig)
     df_records = load_sheet(DEFAULT_FILE_PATH, "records", file_sig=_sig)
-    # Small status to confirm data presence in deployments
-    try:
-        def _n(df):
-            return 0 if df is None or getattr(df, 'empty', True) else len(df)
-        st.caption(
-            f"Data file: '{os.path.basename(DEFAULT_FILE_PATH)}' — sheets loaded: "
-            f"ch={_n(df_ch)}, gl={_n(df_gl)}, reg={_n(df_reg)}, draft={_n(df_draft)}, to={_n(df_to)}"
-        )
-    except Exception:
-        pass
+    # (diagnostic captions removed for clean UI)
 
     selected_years, selected_teams, selected_owners, file_path = sidebar_filters(
         [df_ch, df_to, df_reg, df_draft, df_gl], teams_owners=df_to
@@ -3793,10 +3771,7 @@ def main():
     with tabs[7]:
         render_teams_owners(df_to, selected_years, selected_teams, selected_owners)
 
-    if df_records is not None and not df_records.empty:
-        st.markdown("---")
-        st.markdown("### Records (from sheet)")
-        st.dataframe(df_records, use_container_width=True)
+    # (raw records sheet display removed)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,53 @@
+{
+  "gamelog": {
+    "Season": "Year",
+    "Week": "Week",
+    "Team A": "HomeTeam",
+    "Owner (Team A)": "HomeOwner",
+    "Team A Points": "HomeScore",
+    "Team B": "AwayTeam",
+    "Owner (Team B)": "AwayOwner",
+    "Team B Points": "AwayScore"
+  },
+  "championship_games": {
+    "Season": "Year",
+    "Week": "Week",
+    "Home Team": "HomeTeam",
+    "Owner (Home)": "HomeOwner",
+    "Points (Home)": "HomeScore",
+    "Away Team": "AwayTeam",
+    "Owner (Away)": "AwayOwner",
+    "Points (Away)": "AwayScore",
+    "Derived": [
+      "WinnerTeam",
+      "RunnerUpTeam",
+      "WinnerOwner",
+      "RunnerUpOwner",
+      "WinnerScore",
+      "RunnerUpScore",
+      "MatchType"
+    ]
+  },
+  "teams_owners": {
+    "Home Team": "TeamName",
+    "Owner": "Owner",
+    "Season (if present)": "Year"
+  },
+  "reg_season_tables": {
+    "Season": "Year",
+    "Team": "TeamName",
+    "Owner": "Owner",
+    "W": "Wins",
+    "L": "Losses",
+    "For": "PointsFor",
+    "Against": "PointsAgainst",
+    "Rank (if present)": "Seed"
+  },
+  "draft": {
+    "Season": "Year",
+    "Pick": "Pick",
+    "Owner": "Owner",
+    "Player": "Player",
+    "Position": "Position"
+  }
+}

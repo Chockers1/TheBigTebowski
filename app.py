@@ -1339,15 +1339,13 @@ def sidebar_filters(
     else:
         selected_years = []
 
-    team_options: List[str] = []
     owner_options: List[str] = []
     if teams_owners is not None and not teams_owners.empty:
-        if "TeamName" in teams_owners.columns:
-            team_options = sorted(teams_owners["TeamName"].dropna().astype(str).unique())
         if "Owner" in teams_owners.columns:
             owner_options = sorted(teams_owners["Owner"].dropna().astype(str).unique())
 
-    selected_teams = st.sidebar.multiselect("Team(s)", options=team_options)
+    # Team filter removed: keep API by returning an empty list
+    selected_teams: List[str] = []
     selected_owners = st.sidebar.multiselect("Owner(s)", options=owner_options)
 
     return selected_years, selected_teams, selected_owners, file_path

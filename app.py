@@ -623,7 +623,7 @@ def _render_records_table(title: str, df: pd.DataFrame, columns: List[str]) -> N
             d[c] = d[c].round(2)
 
     st.markdown(f"#### {title}")
-    st.dataframe(d, use_container_width=True)
+    st.dataframe(d, use_container_width=True, hide_index=True)
 
 
 def render_records(
@@ -1538,7 +1538,7 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
                     # Show as standard dataframe
                     disp_cols = [c for c in ["Seed","TeamName","Owner","Wins","Losses","T","Pct"] if c in reg_latest.columns]
                     df_disp = reg_latest[disp_cols].rename(columns={"TeamName":"Team","Wins":"W","Losses":"L"}).copy()
-                    st.table(df_disp)
+                    st.dataframe(df_disp, use_container_width=True, hide_index=True)
                 else:
                     st.info("No regular season standings found for the latest season.")
             else:
@@ -1613,7 +1613,7 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
                         cols = [c for c in [
                             "Year", "Week", "HomeTeam", "HomeOwner", "HomeScore", "AwayTeam", "AwayOwner", "AwayScore"
                         ] if c in gl_last.columns]
-                        st.dataframe(gl_last[cols], use_container_width=True)
+                        st.dataframe(gl_last[cols], use_container_width=True, hide_index=True)
                         shown = True
             if not shown:
                 st.info("No games found for the latest season.")
@@ -1624,7 +1624,7 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
     if finals_summary is not None and not finals_summary.empty:
         fs = finals_summary.copy()
         cols = [c for c in ["Owner", "Week", "Appearances", "Wins", "Losses"] if c in fs.columns]
-        st.table(fs[cols])
+        st.dataframe(fs[cols], use_container_width=True, hide_index=True)
     else:
         st.info("No finals data found in championships sheet to build owner summary.")
 
@@ -2043,7 +2043,7 @@ def render_championships(df_ch, selected_years, selected_teams, selected_owners)
         df_display = df_display[ordered_cols + remaining + (["_YearNum"] if "_YearNum" in df_display.columns else [])]
     if "_YearNum" in df_display.columns:
         df_display = df_display.sort_values("_YearNum", ascending=False).drop(columns=["_YearNum"], errors="ignore")
-    st.dataframe(df_display, use_container_width=True)
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
 
     # Quick highlights as metric cards (Grand Final and Toilet Bowl)
     def _highlights(final_phrase: str):
@@ -2935,7 +2935,7 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             ]
             # Sort by Owner then Opponent (and games desc within owner)
             agg = agg.sort_values(["Owner", "Games", "Opponent"], ascending=[True, False, True])
-            st.dataframe(agg[cols], use_container_width=True)
+            st.dataframe(agg[cols], use_container_width=True, hide_index=True)
         else:
             st.info("No complete owner matchup rows found for the current filters.")
     else:
@@ -3287,7 +3287,7 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         c for c in ["Rank","Owner","Elo","Games","Wins","Losses","Ties","WinPct","RankDelta","EloDelta"]
         if c in top12.columns
     ]
-    st.table(top12[cols])
+    st.dataframe(top12[cols], use_container_width=True, hide_index=True)
 
     # Timeline chart for selected entries
     st.markdown("### Rating timeline")
@@ -3616,7 +3616,7 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         details["_Y"] = pd.to_numeric(details["Year"], errors="coerce")
         details["_W"] = pd.to_numeric(details["Week"], errors="coerce")
         details = details.sort_values(["_Y", "_W"]).drop(columns=["_Y", "_W"], errors="ignore")
-    st.dataframe(details, use_container_width=True)
+    st.dataframe(details, use_container_width=True, hide_index=True)
 
 
 def main():
@@ -3693,4 +3693,3 @@ def main():
 
 if __name__ == "__main__":
     main()
- 

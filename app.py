@@ -3012,7 +3012,7 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             ]
             # Sort by Owner then Opponent (and games desc within owner)
             agg = agg.sort_values(["Owner", "Games", "Opponent"], ascending=[True, False, True])
-            _render_records_table("All owners head-to-head records", agg, cols)
+            st.dataframe(agg[cols], use_container_width=True)
         else:
             st.info("No complete owner matchup rows found for the current filters.")
     else:

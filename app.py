@@ -21,6 +21,7 @@ Run:
 from __future__ import annotations
 
 import os
+import urllib.request
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -28,8 +29,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
-
-
+ 
+    ## 
 # --------------------- Config & Constants ---------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FILE_PATH = os.path.join(BASE_DIR, "fantasy_football.xlsm")
@@ -1394,6 +1395,39 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
                 if not by_owner_year.empty:
                     fig2 = px.line(by_owner_year, x="Year", y="AvgPoints", color="Owner", markers=True, title="Average Points per Game by Year (Owner)")
                     safe_chart(fig2)
+
+
+def _ensure_data_file(local_path: str) -> str:
+    """Ensure the Excel data file exists locally; if missing, try to download.
+
+    Order of sources:
+    1) st.secrets["DATA_URL"] (if defined)
+    2) env var DATA_URL
+    3) GitHub raw URL for the repo file
+    Returns the local path (existing or downloaded). May raise on download failure.
+    """
+    if os.path.exists(local_path):
+        return local_path
+    # 1) Streamlit secrets
+    url = None
+    try:
+        url = st.secrets.get("DATA_URL")  # type: ignore[attr-defined]
+    except Exception:
+        url = None
+    # 2) Environment variable
+    if not url:
+        url = os.environ.get("DATA_URL")
+    # 3) Fallback to GitHub raw URL (public)
+    if not url:
+        url = "https://raw.githubusercontent.com/Chockers1/TheBigTebowski/main/fantasy_football.xlsm"
+    # Download
+    try:
+        urllib.request.urlretrieve(url, local_path)
+        return local_path
+    except Exception as e:
+        # Surface a helpful message in-app
+        st.error(f"Failed to fetch data from {url}. {e}")
+        return local_path
 
 
 def render_championships(df_ch, selected_years, selected_teams, selected_owners):
@@ -3317,12 +3351,25 @@ def main():
     <span class="small-muted">Explore championships, seasons, drafts, head-to-heads, and more from your league's history.</span>
     """, unsafe_allow_html=True)
 
+    # Ensure the data file exists in deployments
+    _ensure_data_file(DEFAULT_FILE_PATH)
+
     df_ch = load_sheet(DEFAULT_FILE_PATH, "championship_games")
     df_to = load_sheet(DEFAULT_FILE_PATH, "teams_owners")
     df_reg = load_sheet(DEFAULT_FILE_PATH, "reg_season_tables")
     df_draft = load_sheet(DEFAULT_FILE_PATH, "draft")
     df_gl = load_sheet(DEFAULT_FILE_PATH, "gamelog")
     df_records = load_sheet(DEFAULT_FILE_PATH, "records")
+    # Small status to confirm data presence in deployments
+    try:
+        def _n(df):
+            return 0 if df is None or getattr(df, 'empty', True) else len(df)
+        st.caption(
+            f"Data file: '{os.path.basename(DEFAULT_FILE_PATH)}' — sheets loaded: "
+            f"ch={_n(df_ch)}, gl={_n(df_gl)}, reg={_n(df_reg)}, draft={_n(df_draft)}, to={_n(df_to)}"
+        )
+    except Exception:
+        pass
 
     selected_years, selected_teams, selected_owners, file_path = sidebar_filters(
         [df_ch, df_to, df_reg, df_draft, df_gl], teams_owners=df_to
@@ -3331,7 +3378,11 @@ def main():
     # Always use bundled path; already loaded above.
 
     if not file_path or not os.path.exists(file_path):
-        st.error("Excel file not found. Please check the path in the sidebar.")
+        exp = os.path.join(BASE_DIR, "fantasy_football.xlsm")
+        st.error(
+            f"Excel file not found in app directory. Expected: '{exp}'. "
+            "We attempted to download the file; if this persists, set DATA_URL in Streamlit secrets or environment."
+        )
         st.stop()
 
     tabs = st.tabs([

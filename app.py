@@ -2457,7 +2457,16 @@ def render_regular_season(df_reg, selected_years, selected_teams, selected_owner
     if missing:
         st.warning(f"Missing columns in reg_season_tables: {missing}")
 
-    st.dataframe(df, use_container_width=True)
+    _render_records_table(
+        "Regular Season",
+        df,
+        [
+            c for c in [
+                "Year", "TeamName", "Owner", "Wins", "Losses", "T", "Ties",
+                "PointsFor", "PointsAgainst", "Seed", "Pct"
+            ] if c in df.columns
+        ],
+    )
 
     # New: Yearly trend charts (Best Seed and Win%)
     try:
@@ -2602,7 +2611,17 @@ def render_regular_season(df_reg, selected_years, selected_teams, selected_owner
         st.markdown("### All-time regular-season record by Owner")
         owner_all = _owner_all_time(df)
         if owner_all is not None and not owner_all.empty:
-            st.dataframe(owner_all, use_container_width=True)
+            _render_records_table(
+                "All-time regular-season record by Owner",
+                owner_all,
+                [
+                    c for c in [
+                        "Owner", "Seasons", "Games", "Wins", "Losses", "Ties",
+                        "WinPct", "AvgWinsPerSeason", "PointsFor", "PointsAgainst",
+                        "PPG F", "PPG A", "BestSeed"
+                    ] if c in owner_all.columns
+                ],
+            )
             # Owner charts
             cch1, cch2 = st.columns(2)
             with cch1:
@@ -2697,22 +2716,6 @@ def render_draft(df_draft, df_teams_owners, df_reg, selected_years, selected_tea
                 st.info("draft sheet not found or empty.")
             return
 
-    # Debug: show which sheet and columns we have
-    with st.expander("Debug: Draft data", expanded=False):
-        try:
-            src = df_draft.attrs.get("__source_sheet__") if hasattr(df_draft, "attrs") else None
-        except Exception:
-            src = None
-        if file_path and os.path.exists(file_path):
-            try:
-                xls = pd.ExcelFile(file_path, engine="openpyxl")
-                st.write("Workbook sheets:", xls.sheet_names)
-            except Exception as e:
-                st.write("Could not list workbook sheets:", str(e))
-        st.write("Source sheet:", src or "(unknown)")
-        st.write("Rows x Cols:", (len(df_draft), len(df_draft.columns)))
-        st.write("Columns:", list(df_draft.columns))
-        st.dataframe(df_draft.head(10))
 
     df_round1 = first_round_draft(df_draft, df_teams_owners, df_reg)
     df_round1 = apply_year_team_owner_filters(df_round1, selected_years, selected_teams, selected_owners)
@@ -2740,11 +2743,11 @@ def render_draft(df_draft, df_teams_owners, df_reg, selected_years, selected_tea
         if missing_rows:
             st.info(f"Note: {missing_rows} Round 1 rows have missing Year/Owner/Pick and may affect averages and joins.")
 
-    st.dataframe(df_display, use_container_width=True)
-    with st.expander("Debug: Round 1 snapshot", expanded=False):
-        st.write("Round1 rows:", len(df_round1))
-        st.write("Columns:", list(df_round1.columns))
-        st.dataframe(df_round1.head(10))
+    _render_records_table(
+        "Round 1 Picks",
+        df_display,
+        ["Year", "Pick", "Owner", "Player", "Position", "Team"],
+    )
 
     if not df_round1.empty and "Position" in df_round1.columns:
         # Ensure consistent colors per position across both charts
@@ -2799,7 +2802,11 @@ def render_draft(df_draft, df_teams_owners, df_reg, selected_years, selected_tea
         )
         avg_pick["AvgPick"] = avg_pick["AvgPick"].round(2)
         avg_pick = avg_pick.sort_values(["AvgPick", "Round1Picks"], ascending=[True, False])
-        st.dataframe(avg_pick, use_container_width=True)
+        _render_records_table(
+            "Average Round 1 draft position by Owner",
+            avg_pick,
+            ["Owner", "AvgPick", "MinPick", "MaxPick", "Round1Picks"],
+        )
     else:
         st.info("Not enough data to compute average Round 1 draft position by owner.")
 
@@ -2918,9 +2925,7 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             df["AwayScore"] = pd.to_numeric(df[b_pts], errors="coerce")
 
     st.markdown("### Head-to-Head (Owners)")
-    with st.expander("Debug: Game Log columns (Head-to-Head)", expanded=False):
-        st.write("Columns:", list(df.columns))
-        st.dataframe(df.head(10))
+    # Debug expander removed for clean UI
     subset_df = None
     if {"HomeOwner", "AwayOwner"}.issubset(df.columns):
         options = sorted(pd.unique(pd.concat([df["HomeOwner"], df["AwayOwner"]], ignore_index=True).dropna().astype(str)))
@@ -2941,9 +2946,16 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
         tmp["_Y"] = pd.to_numeric(tmp["Year"], errors="coerce")
         tmp["_W"] = pd.to_numeric(tmp["Week"], errors="coerce")
         tmp = tmp.sort_values(["_Y", "_W", "Year", "Week"]).drop(columns=["_Y", "_W"], errors="ignore")
-        st.dataframe(tmp.reset_index(drop=True), use_container_width=True)
+        display_df = tmp.reset_index(drop=True)
     else:
-        st.dataframe(table_df.reset_index(drop=True), use_container_width=True)
+        display_df = table_df.reset_index(drop=True)
+    preferred_cols = [
+        "Year", "Week", "HomeTeam", "AwayTeam", "HomeOwner", "AwayOwner",
+        "HomeScore", "AwayScore", "WinnerTeam", "WinnerOwner",
+    ]
+    # Fall back to all columns if many preferred are missing
+    cols_to_show = [c for c in preferred_cols if c in display_df.columns] or list(display_df.columns)
+    _render_records_table("Game Log", display_df, cols_to_show)
 
     # All owners head-to-head records (within current filters)
     st.markdown("### All owners head-to-head records")
@@ -3000,7 +3012,7 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             ]
             # Sort by Owner then Opponent (and games desc within owner)
             agg = agg.sort_values(["Owner", "Games", "Opponent"], ascending=[True, False, True])
-            st.dataframe(agg[cols], use_container_width=True)
+            _render_records_table("All owners head-to-head records", agg, cols)
         else:
             st.info("No complete owner matchup rows found for the current filters.")
     else:
@@ -3102,7 +3114,8 @@ def render_teams_owners(df_to, selected_years, selected_teams, selected_owners):
         st.warning(f"Missing columns in teams_owners: {missing}")
 
     sort_cols = [c for c in ["Year", "TeamName"] if c in df.columns]
-    st.dataframe(df.sort_values(sort_cols) if sort_cols else df, use_container_width=True)
+    base_df = df.sort_values(sort_cols) if sort_cols else df
+    _render_records_table("Teams & Owners", base_df, [c for c in ["Year", "TeamName", "Owner", "Team"] if c in base_df.columns])
 
     if not df.empty:
         if "Year" in df.columns:
@@ -3717,7 +3730,16 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         details["_Y"] = pd.to_numeric(details["Year"], errors="coerce")
         details["_W"] = pd.to_numeric(details["Week"], errors="coerce")
         details = details.sort_values(["_Y", "_W"]).drop(columns=["_Y", "_W"], errors="ignore")
-    st.dataframe(details, use_container_width=True)
+    _render_records_table(
+        "Elo Match Details",
+        details,
+        [
+            c for c in [
+                "Year", "Week", "HomeOwner", "AwayOwner", "HomeScore", "AwayScore",
+                "Winner", "Margin", "HomeEloBefore", "AwayEloBefore", "HomeEloAfter", "AwayEloAfter"
+            ] if c in details.columns
+        ],
+    )
 
 
 def main():

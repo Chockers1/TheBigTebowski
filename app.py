@@ -201,21 +201,7 @@ def _style_light_ui() -> None:
             .overview-card .value { font-size:1.05rem; font-weight:700; color: var(--text); line-height:1.2; }
             .overview-card .sub { font-size:.82rem; color: var(--muted); }
 
-            /* Modern table styling for standings */
-            .standings-wrap { background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,0.05); overflow-x:auto !important; overflow-y:hidden; -webkit-overflow-scrolling: touch; touch-action: pan-x; overscroll-behavior-x: contain; }
-            .standings-title { padding:12px 14px; font-weight:700; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; }
-            .table-modern { width:100%; border-collapse:separate; border-spacing:0; min-width: 640px; table-layout: auto; }
-            .table-modern thead th, .table-modern tbody td { white-space: nowrap; }
-            .table-modern thead th { position:sticky; top:0; background:#f9fafb; color:#374151; font-weight:600; font-size:.9rem; padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; }
-            .table-modern tbody td { padding:10px 12px; border-bottom:1px solid #f1f5f9; font-size:.92rem; color:#111827; }
-            .table-modern tbody tr:hover { background:#f9fafb; }
-            .seed-badge { display:inline-grid; place-items:center; min-width:28px; height:28px; padding:0 8px; border-radius:999px; font-weight:700; font-size:.85rem; border:1px solid var(--border); background:#f3f4f6; color:#111827; }
-            .seed-1 { background:linear-gradient(135deg,#fef3c7,#fde68a); border-color:#f59e0b; }
-            .seed-2 { background:linear-gradient(135deg,#e5e7eb,#d1d5db); border-color:#9ca3af; }
-            .seed-3 { background:linear-gradient(135deg,#fce7f3,#fbcfe8); border-color:#db2777; }
-            .wl { font-variant-numeric: tabular-nums; color:#374151; }
-            .pct { font-variant-numeric: tabular-nums; color:#111827; font-weight:700; }
-            .owner-sub { color:#6b7280; font-size:.85rem; }
+            /* Removed custom standings table styles to use standard Streamlit tables */
 
             /* Finals match cards */
             .match-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap:14px; }
@@ -236,10 +222,7 @@ def _style_light_ui() -> None:
             .loss .team-score { color:#991b1b; }
             .tie .team-name, .tie .team-score { color:#6b7280; }
 
-            /* Finals summary badges */
-            .type-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-weight:600; font-size:.75rem; border:1px solid var(--border); background:#f3f4f6; color:#374151; }
-            .type-badge.gf { background:#fff7ed; border-color:#f59e0b; color:#92400e; }
-            .type-badge.tb { background:#fdf6e7; border-color:#a16207; color:#7c2d12; }
+            /* Removed finals summary badge styles */
 
             /* Mobile-focused tweaks */
             @media (max-width: 640px) {
@@ -251,7 +234,7 @@ def _style_light_ui() -> None:
                 .overview-cards, .record-grid, .season-winners, .match-grid { gap: 10px; }
                 .record-stat { font-size: 1.35rem; }
                 .champion-team { font-size: 1.05rem; }
-                .table-modern tbody td, .table-modern thead th { padding: 8px 10px; }
+                /* Removed .table-modern padding overrides */
                 /* Stack Streamlit columns */
                 [data-testid="stHorizontalBlock"] { gap: 10px !important; }
                 [data-testid="column"] { flex: 1 1 100% !important; width: 100% !important; }
@@ -1555,7 +1538,7 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
                     # Show as standard dataframe
                     disp_cols = [c for c in ["Seed","TeamName","Owner","Wins","Losses","T","Pct"] if c in reg_latest.columns]
                     df_disp = reg_latest[disp_cols].rename(columns={"TeamName":"Team","Wins":"W","Losses":"L"}).copy()
-                    st.dataframe(df_disp, use_container_width=True)
+                    st.table(df_disp)
                 else:
                     st.info("No regular season standings found for the latest season.")
             else:
@@ -1641,7 +1624,7 @@ def render_overview(df_ch, df_gl, df_reg, df_to, selected_years, selected_teams,
     if finals_summary is not None and not finals_summary.empty:
         fs = finals_summary.copy()
         cols = [c for c in ["Owner", "Week", "Appearances", "Wins", "Losses"] if c in fs.columns]
-        st.dataframe(fs[cols], use_container_width=True)
+        st.table(fs[cols])
     else:
         st.info("No finals data found in championships sheet to build owner summary.")
 
@@ -3304,7 +3287,7 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         c for c in ["Rank","Owner","Elo","Games","Wins","Losses","Ties","WinPct","RankDelta","EloDelta"]
         if c in top12.columns
     ]
-    st.dataframe(top12[cols], use_container_width=True)
+    st.table(top12[cols])
 
     # Timeline chart for selected entries
     st.markdown("### Rating timeline")

@@ -145,8 +145,7 @@ def _style_light_ui() -> None:
                 background: #fff; padding: 14px 18px; border-radius: 12px;
                 border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.04);
             }
-            /* Keep content within viewport width */
-            html, body, .stApp { overflow-x: hidden; }
+            /* Keep content within viewport width without suppressing inner scroll areas */
             img, .element-container, .stPlotlyChart, .stAltairChart { max-width: 100% !important; }
             pre, code { white-space: pre-wrap; word-break: break-word; }
             /* Records grid & cards */
@@ -256,6 +255,12 @@ def _style_light_ui() -> None:
                 /* Stack Streamlit columns */
                 [data-testid="stHorizontalBlock"] { gap: 10px !important; }
                 [data-testid="column"] { flex: 1 1 100% !important; width: 100% !important; }
+                /* Allow scroll within internal containers on mobile */
+                .block-container, .element-container, [data-testid="stVerticalBlock"], [data-testid="stHorizontalBlock"] {
+                    overflow-x: visible !important;
+                }
+                /* Enable scroll for Markdown-rendered tables too */
+                [data-testid="stMarkdownContainer"] table { display: block; overflow-x: auto !important; -webkit-overflow-scrolling: touch; max-width: none !important; }
                 /* Ensure Streamlit table/dataframe can scroll horizontally if too wide */
                 [data-testid="stDataFrame"], [data-testid="stTable"],
                 [data-testid*="dataframe"], [data-testid*="table"],

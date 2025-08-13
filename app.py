@@ -203,7 +203,7 @@ def _style_light_ui() -> None:
             .overview-card .sub { font-size:.82rem; color: var(--muted); }
 
             /* Modern table styling for standings */
-            .standings-wrap { background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,0.05); overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling: touch; }
+            .standings-wrap { background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,0.05); overflow-x:auto !important; overflow-y:hidden; -webkit-overflow-scrolling: touch; touch-action: pan-x; overscroll-behavior-x: contain; }
             .standings-title { padding:12px 14px; font-weight:700; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; }
             .table-modern { width:100%; border-collapse:separate; border-spacing:0; min-width: 640px; table-layout: auto; }
             .table-modern thead th, .table-modern tbody td { white-space: nowrap; }
@@ -257,8 +257,18 @@ def _style_light_ui() -> None:
                 [data-testid="stHorizontalBlock"] { gap: 10px !important; }
                 [data-testid="column"] { flex: 1 1 100% !important; width: 100% !important; }
                 /* Ensure Streamlit table/dataframe can scroll horizontally if too wide */
-                [data-testid="stDataFrame"], [data-testid="stTable"] { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-                [data-testid="stDataFrame"] table, [data-testid="stTable"] table { min-width: 560px; }
+                [data-testid="stDataFrame"], [data-testid="stTable"],
+                [data-testid*="dataframe"], [data-testid*="table"],
+                [class*="stDataFrame"], [class*="stTable"],
+                div[role="table"], div[role="grid"] {
+                    overflow-x: auto !important; -webkit-overflow-scrolling: touch; touch-action: pan-x; overscroll-behavior-x: contain;
+                }
+                [data-testid="stDataFrame"] table, [data-testid="stTable"] table,
+                [data-testid*="dataframe"] table, [data-testid*="table"] table,
+                [class*="stDataFrame"] table, [class*="stTable"] table,
+                div[role="table"] table, div[role="grid"] table {
+                    min-width: 560px;
+                }
             }
         </style>
         """,

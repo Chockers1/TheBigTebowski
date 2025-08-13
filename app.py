@@ -735,17 +735,17 @@ def render_records(
             st.markdown("**Top 10 Least Combined Points (Game)**")
             st.dataframe(least_comb[[c for c in ["Year", "Week", "Home", "Away", "Score", "Combined"] if c in least_comb.columns]], use_container_width=True)
 
-        # Biggest win margin (exclude ties where AbsMargin == 0)
-        biggest = pd.concat([base_cols, gl[["AbsMargin"]]], axis=1).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=False).head(10)
+        # Biggest win margin (exclude ties where Margin == 0)
+        biggest = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=False).head(10)
         if not biggest.empty:
             st.markdown("**Top 10 Biggest Win Margins (Game)**")
-            st.dataframe(biggest.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in biggest.columns]], use_container_width=True)
+            st.dataframe(biggest[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in biggest.columns]], use_container_width=True)
 
         # Narrowest win margin (> 0)
-        narrow = pd.concat([base_cols, gl[["AbsMargin"]]], axis=1).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=True).head(10)
+        narrow = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=True).head(10)
         if not narrow.empty:
             st.markdown("**Top 10 Narrowest Win Margins (Game)**")
-            st.dataframe(narrow.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in narrow.columns]], use_container_width=True)
+            st.dataframe(narrow[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in narrow.columns]], use_container_width=True)
 
 
 def apply_year_team_owner_filters(

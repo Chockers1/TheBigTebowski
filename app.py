@@ -24,6 +24,7 @@ import os
 import urllib.request
 import zipfile
 from typing import Dict, List, Optional, Tuple
+import hashlib
 
 import pandas as pd
 import numpy as np
@@ -36,7 +37,7 @@ import streamlit as st
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_FILE_PATH = os.path.join(BASE_DIR, "fantasy_football.xlsm")
 # Increment to invalidate cached reads when schema normalization changes
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 REQUIRED_SHEETS = {
     "championship_games": [
@@ -244,7 +245,12 @@ def _style_light_ui() -> None:
 
 
 @st.cache_data(show_spinner=False)
-def load_sheet(path: str, sheet_name: str, schema_version: int = SCHEMA_VERSION) -> Optional[pd.DataFrame]:
+def load_sheet(
+    path: str,
+    sheet_name: str,
+    schema_version: int = SCHEMA_VERSION,
+    file_sig: Optional[str] = None,
+) -> Optional[pd.DataFrame]:
     """Load a sheet from the Excel file with caching.
 
     Returns None if file/sheet not found.
@@ -286,8 +292,21 @@ def load_sheet(path: str, sheet_name: str, schema_version: int = SCHEMA_VERSION)
                 return None
         df.columns = [str(c).strip() for c in df.columns]
         # Normalize to the app's internal schema; include schema_version in the cache key
-        _ = schema_version
+        # Touch schema_version and file_sig so Streamlit includes them in the cache key.
+        _ = (schema_version, file_sig)
         return normalize_sheet(sheet_name, df)
+    except Exception:
+        return None
+
+
+def _file_signature(path: str) -> Optional[str]:
+    """Compute a stable signature for the data file to bust Streamlit cache when it changes."""
+    try:
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as f:
+            data = f.read()
+        return hashlib.md5(data).hexdigest()
     except Exception:
         return None
 
@@ -3391,12 +3410,14 @@ def main():
     except Exception:
         pass
 
-    df_ch = load_sheet(DEFAULT_FILE_PATH, "championship_games")
-    df_to = load_sheet(DEFAULT_FILE_PATH, "teams_owners")
-    df_reg = load_sheet(DEFAULT_FILE_PATH, "reg_season_tables")
-    df_draft = load_sheet(DEFAULT_FILE_PATH, "draft")
-    df_gl = load_sheet(DEFAULT_FILE_PATH, "gamelog")
-    df_records = load_sheet(DEFAULT_FILE_PATH, "records")
+    # Compute a file signature to bust cache when the Excel changes
+    _sig = _file_signature(DEFAULT_FILE_PATH)
+    df_ch = load_sheet(DEFAULT_FILE_PATH, "championship_games", file_sig=_sig)
+    df_to = load_sheet(DEFAULT_FILE_PATH, "teams_owners", file_sig=_sig)
+    df_reg = load_sheet(DEFAULT_FILE_PATH, "reg_season_tables", file_sig=_sig)
+    df_draft = load_sheet(DEFAULT_FILE_PATH, "draft", file_sig=_sig)
+    df_gl = load_sheet(DEFAULT_FILE_PATH, "gamelog", file_sig=_sig)
+    df_records = load_sheet(DEFAULT_FILE_PATH, "records", file_sig=_sig)
     # Small status to confirm data presence in deployments
     try:
         def _n(df):

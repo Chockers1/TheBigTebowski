@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import urllib.request
+import zipfile
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -1406,7 +1407,35 @@ def _ensure_data_file(local_path: str) -> str:
     3) GitHub raw URL for the repo file
     Returns the local path (existing or downloaded). May raise on download failure.
     """
+    def _looks_like_lfs_pointer(p: str) -> bool:
+        try:
+            if not os.path.exists(p) or os.path.getsize(p) > 2048:
+                return False
+            with open(p, 'rb') as f:
+                head = f.read(256)
+            return b"git-lfs" in head
+        except Exception:
+            return False
+
+    def _download_to(p: str, url: str) -> bool:
+        try:
+            urllib.request.urlretrieve(url, p)
+            return True
+        except Exception as e:
+            st.error(f"Failed to fetch data from {url}. {e}")
+            return False
+
+    # If file exists, verify it's a valid Excel (zip container) and not an LFS pointer
     if os.path.exists(local_path):
+        if _looks_like_lfs_pointer(local_path) or not zipfile.is_zipfile(local_path):
+            # Try to replace with a real download
+            url = None
+            try:
+                url = st.secrets.get("DATA_URL")
+            except Exception:
+                url = None
+            url = url or os.environ.get("DATA_URL") or "https://raw.githubusercontent.com/Chockers1/TheBigTebowski/main/fantasy_football.xlsm"
+            _download_to(local_path, url)
         return local_path
     # 1) Streamlit secrets
     url = None
@@ -1421,13 +1450,8 @@ def _ensure_data_file(local_path: str) -> str:
     if not url:
         url = "https://raw.githubusercontent.com/Chockers1/TheBigTebowski/main/fantasy_football.xlsm"
     # Download
-    try:
-        urllib.request.urlretrieve(url, local_path)
-        return local_path
-    except Exception as e:
-        # Surface a helpful message in-app
-        st.error(f"Failed to fetch data from {url}. {e}")
-        return local_path
+    _download_to(local_path, url)
+    return local_path
 
 
 def render_championships(df_ch, selected_years, selected_teams, selected_owners):
@@ -3353,6 +3377,12 @@ def main():
 
     # Ensure the data file exists in deployments
     _ensure_data_file(DEFAULT_FILE_PATH)
+    try:
+        size = os.path.getsize(DEFAULT_FILE_PATH) if os.path.exists(DEFAULT_FILE_PATH) else 0
+        valid_zip = zipfile.is_zipfile(DEFAULT_FILE_PATH) if size else False
+        st.caption(f"Data file check: size={size} bytes, zip={valid_zip}")
+    except Exception:
+        pass
 
     df_ch = load_sheet(DEFAULT_FILE_PATH, "championship_games")
     df_to = load_sheet(DEFAULT_FILE_PATH, "teams_owners")

@@ -641,7 +641,7 @@ def render_records(
             else:
                 st.info("No PointsAgainst column found.")
 
-    st.subheader("Game Records (From Game Log)")
+    st.subheader("Game Records")
     if df_gl is None or df_gl.empty:
         st.info("No game log data available.")
     else:
@@ -655,13 +655,38 @@ def render_records(
         if gl is None or gl.empty:
             st.info("No rows after filters.")
             return
-        # Combined and margin
+        # Combined and margin (absolute for ranking)
         gl = gl.assign(
             Combined=(gl.get("HomeScore").fillna(0) + gl.get("AwayScore").fillna(0)),
             Margin=(gl.get("HomeScore") - gl.get("AwayScore")),
         )
-        # Winner side/labels
         gl["AbsMargin"] = gl["Margin"].abs()
+
+        # Derive max/min scoring team details for clarity
+        home = gl["HomeScore"].astype(float)
+        away = gl["AwayScore"].astype(float)
+        mask_home_max = home >= away
+        mask_home_min = home <= away
+        gl["MaxTeamPoints"] = np.where(mask_home_max, home, away)
+        gl["MaxTeam"] = np.where(mask_home_max, gl.get("HomeTeam"), gl.get("AwayTeam"))
+        gl["MaxOwner"] = np.where(mask_home_max, gl.get("HomeOwner"), gl.get("AwayOwner"))
+        gl["MinTeamPoints"] = np.where(mask_home_min, home, away)
+        gl["MinTeam"] = np.where(mask_home_min, gl.get("HomeTeam"), gl.get("AwayTeam"))
+        gl["MinOwner"] = np.where(mask_home_min, gl.get("HomeOwner"), gl.get("AwayOwner"))
+
+        def _fmt_team_owner(name, owner):
+            name = "" if pd.isna(name) else str(name)
+            owner = "" if pd.isna(owner) else str(owner)
+            if name and owner:
+                return f"{name} ({owner})"
+            return name or owner
+
+        gl["MaxTeamDisp"] = [
+            _fmt_team_owner(n, o) for n, o in zip(gl.get("MaxTeam"), gl.get("MaxOwner"))
+        ]
+        gl["MinTeamDisp"] = [
+            _fmt_team_owner(n, o) for n, o in zip(gl.get("MinTeam"), gl.get("MinOwner"))
+        ]
         # Build a compact display row for each game
         def _mk_row(r):
             try:
@@ -682,41 +707,42 @@ def render_records(
 
         base_cols = gl.apply(_mk_row, axis=1)
 
-        # Most points by a single team in a game
-        gl_single = gl.copy()
-        gl_single["MaxTeamPoints"] = np.nanmax(np.vstack([gl_single["HomeScore"].fillna(np.nan), gl_single["AwayScore"].fillna(np.nan)]), axis=0)
-        top_single = base_cols.join(gl_single[["MaxTeamPoints"]]).dropna(subset=["MaxTeamPoints"]).sort_values("MaxTeamPoints", ascending=False).head(10)
+        # Top 10 most points by a single team (with clear team/owner shown)
+        top_single = pd.concat([base_cols, gl[["MaxTeamDisp", "MaxTeamPoints"]]], axis=1)
+        top_single = top_single.dropna(subset=["MaxTeamPoints"]).sort_values("MaxTeamPoints", ascending=False).head(10)
         if not top_single.empty:
             st.markdown("**Top 10 Most Points by a Team (Game)**")
-            st.dataframe(top_single.rename(columns={"MaxTeamPoints": "Points"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Points"] if c in top_single.columns]], use_container_width=True)
+            ts = top_single.rename(columns={"MaxTeamDisp": "Team (Owner)", "MaxTeamPoints": "Points"})
+            st.dataframe(ts[[c for c in ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"] if c in ts.columns]], use_container_width=True)
 
-        # Least points by a single team in a game
-        gl_single["MinTeamPoints"] = np.nanmin(np.vstack([gl_single["HomeScore"].fillna(np.nan), gl_single["AwayScore"].fillna(np.nan)]), axis=0)
-        low_single = base_cols.join(gl_single[["MinTeamPoints"]]).dropna(subset=["MinTeamPoints"]).sort_values("MinTeamPoints", ascending=True).head(10)
+        # Top 10 least points by a single team (include combined points)
+        low_single = pd.concat([base_cols, gl[["MinTeamDisp", "MinTeamPoints"]]], axis=1)
+        low_single = low_single.dropna(subset=["MinTeamPoints"]).sort_values("MinTeamPoints", ascending=True).head(10)
         if not low_single.empty:
             st.markdown("**Top 10 Least Points by a Team (Game)**")
-            st.dataframe(low_single.rename(columns={"MinTeamPoints": "Points"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Points"] if c in low_single.columns]], use_container_width=True)
+            ls = low_single.rename(columns={"MinTeamDisp": "Team (Owner)", "MinTeamPoints": "Points"})
+            st.dataframe(ls[[c for c in ["Team (Owner)", "Points", "Combined", "Year", "Week", "Home", "Away", "Score"] if c in ls.columns]], use_container_width=True)
 
-        # Most combined points
-        most_comb = base_cols.join(gl[["Combined"]]).dropna(subset=["Combined"]).sort_values("Combined", ascending=False).head(10)
+        # Most combined points (use base_cols which already contains Combined)
+        most_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=False).head(10)
         if not most_comb.empty:
             st.markdown("**Top 10 Most Combined Points (Game)**")
             st.dataframe(most_comb[[c for c in ["Year", "Week", "Home", "Away", "Score", "Combined"] if c in most_comb.columns]], use_container_width=True)
 
         # Least combined points
-        least_comb = base_cols.join(gl[["Combined"]]).dropna(subset=["Combined"]).sort_values("Combined", ascending=True).head(10)
+        least_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=True).head(10)
         if not least_comb.empty:
             st.markdown("**Top 10 Least Combined Points (Game)**")
             st.dataframe(least_comb[[c for c in ["Year", "Week", "Home", "Away", "Score", "Combined"] if c in least_comb.columns]], use_container_width=True)
 
         # Biggest win margin (exclude ties where AbsMargin == 0)
-        biggest = base_cols.join(gl[["AbsMargin"]]).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=False).head(10)
+        biggest = pd.concat([base_cols, gl[["AbsMargin"]]], axis=1).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=False).head(10)
         if not biggest.empty:
             st.markdown("**Top 10 Biggest Win Margins (Game)**")
             st.dataframe(biggest.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in biggest.columns]], use_container_width=True)
 
         # Narrowest win margin (> 0)
-        narrow = base_cols.join(gl[["AbsMargin"]]).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=True).head(10)
+        narrow = pd.concat([base_cols, gl[["AbsMargin"]]], axis=1).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=True).head(10)
         if not narrow.empty:
             st.markdown("**Top 10 Narrowest Win Margins (Game)**")
             st.dataframe(narrow.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in narrow.columns]], use_container_width=True)

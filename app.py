@@ -130,7 +130,8 @@ def _style_light_ui() -> None:
             header[data-testid="stHeader"] { background: rgba(255,255,255,0.6); backdrop-filter: blur(8px); }
             h1, h2, h3 { color: var(--text); letter-spacing: 0.2px; }
             .small-muted { color: var(--muted); font-size: 0.95rem; }
-            .stTabs [data-baseweb="tab-list"] { gap: 8px; }
+            .stTabs [data-baseweb="tab-list"] { gap: 8px; overflow-x: auto; scrollbar-width: thin; }
+            .stTabs [data-baseweb="tab-list"]::-webkit-scrollbar { height: 6px; }
             .stTabs [data-baseweb="tab"] {
                 background: var(--panel);
                 border-radius: 10px; padding: 10px 16px; color: var(--text);
@@ -144,6 +145,10 @@ def _style_light_ui() -> None:
                 background: #fff; padding: 14px 18px; border-radius: 12px;
                 border: 1px solid var(--border); box-shadow: 0 1px 3px rgba(0,0,0,0.04);
             }
+            /* Keep content within viewport width */
+            html, body, .stApp { overflow-x: hidden; }
+            img, .element-container, .stPlotlyChart, .stAltairChart { max-width: 100% !important; }
+            pre, code { white-space: pre-wrap; word-break: break-word; }
             /* Records grid & cards */
             .record-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
             .record-card { background:#fff; border:1px solid var(--border); border-radius:12px; padding: 12px 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }
@@ -198,9 +203,10 @@ def _style_light_ui() -> None:
             .overview-card .sub { font-size:.82rem; color: var(--muted); }
 
             /* Modern table styling for standings */
-            .standings-wrap { background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,0.05); overflow:hidden; }
+            .standings-wrap { background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:0 1px 4px rgba(0,0,0,0.05); overflow-x:auto; overflow-y:hidden; -webkit-overflow-scrolling: touch; }
             .standings-title { padding:12px 14px; font-weight:700; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:8px; }
-            .table-modern { width:100%; border-collapse:separate; border-spacing:0; }
+            .table-modern { width:100%; border-collapse:separate; border-spacing:0; min-width: 640px; table-layout: auto; }
+            .table-modern thead th, .table-modern tbody td { white-space: nowrap; }
             .table-modern thead th { position:sticky; top:0; background:#f9fafb; color:#374151; font-weight:600; font-size:.9rem; padding:10px 12px; border-bottom:1px solid var(--border); text-align:left; }
             .table-modern tbody td { padding:10px 12px; border-bottom:1px solid #f1f5f9; font-size:.92rem; color:#111827; }
             .table-modern tbody tr:hover { background:#f9fafb; }
@@ -235,6 +241,25 @@ def _style_light_ui() -> None:
             .type-badge { display:inline-block; padding:2px 8px; border-radius:999px; font-weight:600; font-size:.75rem; border:1px solid var(--border); background:#f3f4f6; color:#374151; }
             .type-badge.gf { background:#fff7ed; border-color:#f59e0b; color:#92400e; }
             .type-badge.tb { background:#fdf6e7; border-color:#a16207; color:#7c2d12; }
+
+            /* Mobile-focused tweaks */
+            @media (max-width: 640px) {
+                .block-container { padding: 0.75rem 0.9rem 2rem; }
+                h1 { font-size: 1.4rem; }
+                h2 { font-size: 1.2rem; }
+                h3 { font-size: 1.05rem; }
+                .stTabs [data-baseweb="tab"] { padding: 8px 10px; font-size: 0.9rem; }
+                .overview-cards, .record-grid, .season-winners, .match-grid { gap: 10px; }
+                .record-stat { font-size: 1.35rem; }
+                .champion-team { font-size: 1.05rem; }
+                .table-modern tbody td, .table-modern thead th { padding: 8px 10px; }
+                /* Stack Streamlit columns */
+                [data-testid="stHorizontalBlock"] { gap: 10px !important; }
+                [data-testid="column"] { flex: 1 1 100% !important; width: 100% !important; }
+                /* Ensure Streamlit table/dataframe can scroll horizontally if too wide */
+                [data-testid="stDataFrame"], [data-testid="stTable"] { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+                [data-testid="stDataFrame"] table, [data-testid="stTable"] table { min-width: 560px; }
+            }
         </style>
         """,
         unsafe_allow_html=True,
@@ -3736,7 +3761,7 @@ def main():
         page_title="The Big Tebowski – League History",
         page_icon="🏈",
         layout="wide",
-        initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
     )
     _style_light_ui()
 

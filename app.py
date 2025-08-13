@@ -3381,6 +3381,13 @@ def main():
         size = os.path.getsize(DEFAULT_FILE_PATH) if os.path.exists(DEFAULT_FILE_PATH) else 0
         valid_zip = zipfile.is_zipfile(DEFAULT_FILE_PATH) if size else False
         st.caption(f"Data file check: size={size} bytes, zip={valid_zip}")
+        # List workbook sheets to verify content in Cloud
+        if size and valid_zip:
+            try:
+                xls = pd.ExcelFile(DEFAULT_FILE_PATH, engine="openpyxl")
+                st.caption("Workbook sheets: " + ", ".join(xls.sheet_names))
+            except Exception as e:
+                st.caption(f"Workbook open error: {e}")
     except Exception:
         pass
 

@@ -805,7 +805,7 @@ def render_records(
             wt = winning_tbl.rename(columns={"WinningTeamDisp": "Team (Owner)", "WinningPoints": "Points"})
             st.dataframe(wt[[c for c in ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"] if c in wt.columns]], use_container_width=True)
 
-        # Longest win streak by owner (overall)
+    # Longest win streak by owner (overall)
         try:
             # Two-row per game: owner + result
             a = pd.DataFrame({
@@ -849,6 +849,48 @@ def render_records(
             if not top_streaks.empty:
                 st.markdown("**Top 10 Longest Win Streaks (Owner)**")
                 st.dataframe(top_streaks[["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"]], use_container_width=True)
+        except Exception:
+            pass
+
+        # Longest losing streak by owner (overall)
+        try:
+            # Re-use the long dataframe if available; else recompute quickly
+            if 'long' not in locals():
+                a = pd.DataFrame({
+                    "Owner": gl.get("HomeOwner"),
+                    "Year": gl.get("Year"),
+                    "Week": gl.get("Week"),
+                    "Win": gl.get("HomeScore") > gl.get("AwayScore"),
+                })
+                b = pd.DataFrame({
+                    "Owner": gl.get("AwayOwner"),
+                    "Year": gl.get("Year"),
+                    "Week": gl.get("Week"),
+                    "Win": gl.get("AwayScore") > gl.get("HomeScore"),
+                })
+                long = pd.concat([a, b], ignore_index=True)
+                long["Year"] = pd.to_numeric(long["Year"], errors="coerce")
+                long["Week"] = pd.to_numeric(long["Week"], errors="coerce")
+                long = long.dropna(subset=["Owner", "Year", "Week"]).sort_values(["Owner", "Year", "Week"])  # chronological
+
+            # Invert wins to mark losing segments
+            s = (~long["Win"].astype(bool)).rename("Lose")
+            grp = (s != s.shift()).cumsum()
+            seg2 = long.copy()
+            seg2["seg"] = grp
+            seg2["is_lose_seg"] = s
+            lose_segs = seg2[seg2["is_lose_seg"]]
+            agg2 = lose_segs.groupby(["Owner", "seg"]).agg(
+                Streak=("Lose", "size"),
+                StartYear=("Year", "first"),
+                StartWeek=("Week", "first"),
+                EndYear=("Year", "last"),
+                EndWeek=("Week", "last"),
+            ).reset_index(drop=False)
+            top_losing = agg2.sort_values(["Streak"], ascending=False).head(10)
+            if not top_losing.empty:
+                st.markdown("**Top 10 Longest Losing Streaks (Owner)**")
+                st.dataframe(top_losing[["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"]], use_container_width=True)
         except Exception:
             pass
 

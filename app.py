@@ -577,6 +577,151 @@ def compute_winner_team(df_gl: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def render_records(
+    df_gl: Optional[pd.DataFrame],
+    df_reg: Optional[pd.DataFrame],
+    selected_years: Optional[List[int]],
+    selected_teams: Optional[List[str]],
+    selected_owners: Optional[List[str]],
+):
+    """Display top-10 records for seasons (from regular season) and games (from gamelog)."""
+    st.subheader("Season Records (Regular Season)")
+    if df_reg is None or df_reg.empty:
+        st.info("No regular season data available.")
+    else:
+        reg = df_reg.copy()
+        # Ensure numeric
+        for c in ["Year", "Wins", "Losses", "PointsFor", "PointsAgainst"]:
+            if c in reg.columns:
+                reg[c] = pd.to_numeric(reg[c], errors="coerce")
+        # Apply filters
+        reg = apply_year_team_owner_filters(reg, years=selected_years, teams=selected_teams, owners=selected_owners)
+        if reg is None or reg.empty:
+            st.info("No rows after filters.")
+        else:
+            # Compute win percentage
+            games = reg.get("Wins", 0).fillna(0) + reg.get("Losses", 0).fillna(0)
+            if "T" in reg.columns:
+                try:
+                    games = games + pd.to_numeric(reg["T"], errors="coerce").fillna(0)
+                except Exception:
+                    pass
+            reg = reg.assign(GP=games)
+            with np.errstate(divide='ignore', invalid='ignore'):
+                reg["WinPct"] = np.where(reg["GP"] > 0, reg["Wins"] / reg["GP"], np.nan)
+
+            # Highest win %
+            cols = [c for c in ["Year", "TeamName", "Owner", "Wins", "Losses", "GP", "WinPct"] if c in reg.columns]
+            top_winpct = reg[cols].dropna(subset=["WinPct"]).sort_values(["WinPct", "Wins"], ascending=[False, False]).head(10)
+            # Format
+            if not top_winpct.empty:
+                df_disp = top_winpct.copy()
+                df_disp["Win %"] = (df_disp["WinPct"] * 100).round(1)
+                df_disp = df_disp.rename(columns={"TeamName": "Team"})
+                st.markdown("**Top 10 Highest Win % (by Season)**")
+                st.dataframe(df_disp[[c for c in ["Year", "Team", "Owner", "Wins", "Losses", "GP", "Win %"] if c in df_disp.columns]], use_container_width=True)
+            else:
+                st.info("No data for Highest Win %.")
+
+            # Most points in a season
+            if "PointsFor" in reg.columns:
+                top_pf = reg.sort_values(["PointsFor"], ascending=False).head(10)
+                df_disp = top_pf.rename(columns={"TeamName": "Team", "PointsFor": "Points"})
+                st.markdown("**Top 10 Most Points in a Season**")
+                st.dataframe(df_disp[[c for c in ["Year", "Team", "Owner", "Points"] if c in df_disp.columns]], use_container_width=True)
+            else:
+                st.info("No PointsFor column found.")
+
+            # Most points against in a season
+            if "PointsAgainst" in reg.columns:
+                top_pa = reg.sort_values(["PointsAgainst"], ascending=False).head(10)
+                df_disp = top_pa.rename(columns={"TeamName": "Team", "PointsAgainst": "Points Against"})
+                st.markdown("**Top 10 Most Points Against in a Season**")
+                st.dataframe(df_disp[[c for c in ["Year", "Team", "Owner", "Points Against"] if c in df_disp.columns]], use_container_width=True)
+            else:
+                st.info("No PointsAgainst column found.")
+
+    st.subheader("Game Records (From Game Log)")
+    if df_gl is None or df_gl.empty:
+        st.info("No game log data available.")
+    else:
+        gl = df_gl.copy()
+        # Normalize numeric
+        for c in ["Year", "Week", "HomeScore", "AwayScore"]:
+            if c in gl.columns:
+                gl[c] = pd.to_numeric(gl[c], errors="coerce")
+        # Apply filters
+        gl = apply_year_team_owner_filters(gl, years=selected_years, teams=selected_teams, owners=selected_owners)
+        if gl is None or gl.empty:
+            st.info("No rows after filters.")
+            return
+        # Combined and margin
+        gl = gl.assign(
+            Combined=(gl.get("HomeScore").fillna(0) + gl.get("AwayScore").fillna(0)),
+            Margin=(gl.get("HomeScore") - gl.get("AwayScore")),
+        )
+        # Winner side/labels
+        gl["AbsMargin"] = gl["Margin"].abs()
+        # Build a compact display row for each game
+        def _mk_row(r):
+            try:
+                home = f"{r.get('HomeTeam','')} ({r.get('HomeOwner','')})"
+                away = f"{r.get('AwayTeam','')} ({r.get('AwayOwner','')})"
+                score = f"{int(r['HomeScore'])}-{int(r['AwayScore'])}" if pd.notna(r["HomeScore"]) and pd.notna(r["AwayScore"]) else "-"
+                return pd.Series({
+                    "Year": r.get("Year"),
+                    "Week": r.get("Week"),
+                    "Home": home,
+                    "Away": away,
+                    "Score": score,
+                    "Combined": r.get("Combined"),
+                    "Margin": r.get("AbsMargin"),
+                })
+            except Exception:
+                return pd.Series()
+
+        base_cols = gl.apply(_mk_row, axis=1)
+
+        # Most points by a single team in a game
+        gl_single = gl.copy()
+        gl_single["MaxTeamPoints"] = np.nanmax(np.vstack([gl_single["HomeScore"].fillna(np.nan), gl_single["AwayScore"].fillna(np.nan)]), axis=0)
+        top_single = base_cols.join(gl_single[["MaxTeamPoints"]]).dropna(subset=["MaxTeamPoints"]).sort_values("MaxTeamPoints", ascending=False).head(10)
+        if not top_single.empty:
+            st.markdown("**Top 10 Most Points by a Team (Game)**")
+            st.dataframe(top_single.rename(columns={"MaxTeamPoints": "Points"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Points"] if c in top_single.columns]], use_container_width=True)
+
+        # Least points by a single team in a game
+        gl_single["MinTeamPoints"] = np.nanmin(np.vstack([gl_single["HomeScore"].fillna(np.nan), gl_single["AwayScore"].fillna(np.nan)]), axis=0)
+        low_single = base_cols.join(gl_single[["MinTeamPoints"]]).dropna(subset=["MinTeamPoints"]).sort_values("MinTeamPoints", ascending=True).head(10)
+        if not low_single.empty:
+            st.markdown("**Top 10 Least Points by a Team (Game)**")
+            st.dataframe(low_single.rename(columns={"MinTeamPoints": "Points"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Points"] if c in low_single.columns]], use_container_width=True)
+
+        # Most combined points
+        most_comb = base_cols.join(gl[["Combined"]]).dropna(subset=["Combined"]).sort_values("Combined", ascending=False).head(10)
+        if not most_comb.empty:
+            st.markdown("**Top 10 Most Combined Points (Game)**")
+            st.dataframe(most_comb[[c for c in ["Year", "Week", "Home", "Away", "Score", "Combined"] if c in most_comb.columns]], use_container_width=True)
+
+        # Least combined points
+        least_comb = base_cols.join(gl[["Combined"]]).dropna(subset=["Combined"]).sort_values("Combined", ascending=True).head(10)
+        if not least_comb.empty:
+            st.markdown("**Top 10 Least Combined Points (Game)**")
+            st.dataframe(least_comb[[c for c in ["Year", "Week", "Home", "Away", "Score", "Combined"] if c in least_comb.columns]], use_container_width=True)
+
+        # Biggest win margin (exclude ties where AbsMargin == 0)
+        biggest = base_cols.join(gl[["AbsMargin"]]).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=False).head(10)
+        if not biggest.empty:
+            st.markdown("**Top 10 Biggest Win Margins (Game)**")
+            st.dataframe(biggest.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in biggest.columns]], use_container_width=True)
+
+        # Narrowest win margin (> 0)
+        narrow = base_cols.join(gl[["AbsMargin"]]).dropna(subset=["AbsMargin"]).query("AbsMargin > 0").sort_values("AbsMargin", ascending=True).head(10)
+        if not narrow.empty:
+            st.markdown("**Top 10 Narrowest Win Margins (Game)**")
+            st.dataframe(narrow.rename(columns={"AbsMargin": "Margin"})[[c for c in ["Year", "Week", "Home", "Away", "Score", "Margin"] if c in narrow.columns]], use_container_width=True)
+
+
 def apply_year_team_owner_filters(
     df: pd.DataFrame,
     years: Optional[List[int]] = None,
@@ -3448,6 +3593,7 @@ def main():
         "Championships & Toilet Bowl",
         "Regular Season",
     "Rating",
+    "Records",
         "Draft (Round 1)",
         "Head-to-Head & Game Log",
         "Teams & Owners",
@@ -3462,10 +3608,12 @@ def main():
     with tabs[3]:
         render_rating(df_gl, selected_years, selected_teams, selected_owners)
     with tabs[4]:
-        render_draft(df_draft, df_to, df_reg, selected_years, selected_teams, selected_owners, file_path)
+        render_records(df_gl, df_reg, selected_years, selected_teams, selected_owners)
     with tabs[5]:
-        render_head_to_head(df_gl, selected_years, selected_teams, selected_owners)
+        render_draft(df_draft, df_to, df_reg, selected_years, selected_teams, selected_owners, file_path)
     with tabs[6]:
+        render_head_to_head(df_gl, selected_years, selected_teams, selected_owners)
+    with tabs[7]:
         render_teams_owners(df_to, selected_years, selected_teams, selected_owners)
 
     if df_records is not None and not df_records.empty:

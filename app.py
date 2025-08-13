@@ -846,9 +846,11 @@ def render_records(
                 EndWeek=("Week", "last"),
             ).reset_index(drop=False)
             top_streaks = agg.sort_values(["Streak"], ascending=False).head(10)
+            st.markdown("**Top 10 Longest Win Streaks (Owner)**")
             if not top_streaks.empty:
-                st.markdown("**Top 10 Longest Win Streaks (Owner)**")
                 st.dataframe(top_streaks[["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"]], use_container_width=True)
+            else:
+                st.info("No win streaks found for current filters.")
         except Exception:
             pass
 
@@ -888,9 +890,11 @@ def render_records(
                 EndWeek=("Week", "last"),
             ).reset_index(drop=False)
             top_losing = agg2.sort_values(["Streak"], ascending=False).head(10)
+            st.markdown("**Top 10 Longest Losing Streaks (Owner)**")
             if not top_losing.empty:
-                st.markdown("**Top 10 Longest Losing Streaks (Owner)**")
                 st.dataframe(top_losing[["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"]], use_container_width=True)
+            else:
+                st.info("No losing streaks found for current filters.")
         except Exception:
             pass
 

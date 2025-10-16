@@ -561,7 +561,24 @@ def normalize_sheet(sheet: str, df: Optional[pd.DataFrame]) -> Optional[pd.DataF
             mapping[get_col(["against"]) ] = "PointsAgainst"
         if get_col(["rank"]):
             mapping[get_col(["rank"]) ] = "Seed"
+            # Add new columns
+            if get_col(["Expected Points"]):
+                mapping[get_col(["Expected Points"]) ] = "Expected Points"
+            if get_col(["Actual - Expected"]):
+                mapping[get_col(["Actual - Expected"]) ] = "Actual - Expected"
         out = out.rename(columns=mapping)
+        # Coerce numeric columns to avoid mixed dtypes from Excel formulas
+        for numeric_col in [
+            "Wins",
+            "Losses",
+            "PointsFor",
+            "PointsAgainst",
+            "Expected Points",
+            "Actual - Expected",
+            "Seed",
+        ]:
+            if numeric_col in out.columns:
+                out[numeric_col] = pd.to_numeric(out[numeric_col], errors="coerce")
         out = _strip_strings(out)
         return out
 
@@ -640,7 +657,7 @@ def render_records(
     else:
         reg = df_reg.copy()
         # Ensure numeric
-        for c in ["Year", "Wins", "Losses", "PointsFor", "PointsAgainst"]:
+        for c in ["Year", "Wins", "Losses", "PointsFor", "PointsAgainst", "Expected Points", "Actual - Expected"]:
             if c in reg.columns:
                 reg[c] = pd.to_numeric(reg[c], errors="coerce")
         # Apply filters
@@ -661,29 +678,29 @@ def render_records(
 
             # Highest win %
             cols = [c for c in ["Year", "TeamName", "Owner", "Wins", "Losses", "GP", "WinPct"] if c in reg.columns]
-            top_winpct = reg[cols].dropna(subset=["WinPct"]).sort_values(["WinPct", "Wins"], ascending=[False, False]).head(10)
+            top_winpct = reg[cols].dropna(subset=["WinPct"]).sort_values(["WinPct", "Wins"], ascending=[False, False]).head(20)
             # Format
             if not top_winpct.empty:
                 df_disp = top_winpct.copy()
                 df_disp["Win %"] = (df_disp["WinPct"] * 100).round(1)
                 df_disp = df_disp.rename(columns={"TeamName": "Team"})
-                _render_records_table("Top 10 Highest Win % (by Season)", df_disp, ["Year", "Team", "Owner", "Wins", "Losses", "GP", "Win %"])
+                _render_records_table("Top 20 Highest Win % (by Season)", df_disp, ["Year", "Team", "Owner", "Wins", "Losses", "GP", "Win %"])
             else:
                 st.info("No data for Highest Win %.")
 
             # Most points in a season
             if "PointsFor" in reg.columns:
-                top_pf = reg.sort_values(["PointsFor"], ascending=False).head(10)
+                top_pf = reg.sort_values(["PointsFor"], ascending=False).head(20)
                 df_disp = top_pf.rename(columns={"TeamName": "Team", "PointsFor": "Points"})
-                _render_records_table("Top 10 Most Points in a Season", df_disp, ["Year", "Team", "Owner", "Points"])
+                _render_records_table("Top 20 Most Points in a Season", df_disp, ["Year", "Team", "Owner", "Points"])
             else:
                 st.info("No PointsFor column found.")
 
             # Most points against in a season
             if "PointsAgainst" in reg.columns:
-                top_pa = reg.sort_values(["PointsAgainst"], ascending=False).head(10)
+                top_pa = reg.sort_values(["PointsAgainst"], ascending=False).head(20)
                 df_disp = top_pa.rename(columns={"TeamName": "Team", "PointsAgainst": "Points Against"})
-                _render_records_table("Top 10 Most Points Against in a Season", df_disp, ["Year", "Team", "Owner", "Points Against"])
+                _render_records_table("Top 20 Most Points Against in a Season", df_disp, ["Year", "Team", "Owner", "Points Against"])
             else:
                 st.info("No PointsAgainst column found.")
 
@@ -696,25 +713,25 @@ def render_records(
                     reg_pp["PPG Diff"] = np.where(reg_pp["GP"] > 0, (reg_pp["PointsFor"] - reg_pp["PointsAgainst"]) / reg_pp["GP"], np.nan)
 
                 # Best offense (highest PPG F)
-                best_off = reg_pp.sort_values(["PPG F"], ascending=False).head(10)
+                best_off = reg_pp.sort_values(["PPG F"], ascending=False).head(20)
                 if not best_off.empty:
                     df_off = best_off.rename(columns={"TeamName": "Team"}).copy()
                     df_off["PPG F"] = df_off["PPG F"].round(2)
-                    _render_records_table("Top 10 Best Offense (PPG For) — Season", df_off, ["Year", "Team", "Owner", "GP", "PPG F"])
+                    _render_records_table("Top 20 Best Offense (PPG For) — Season", df_off, ["Year", "Team", "Owner", "GP", "PPG F"])
 
                 # Best defense (lowest PPG A)
-                best_def = reg_pp.sort_values(["PPG A"], ascending=True).head(10)
+                best_def = reg_pp.sort_values(["PPG A"], ascending=True).head(20)
                 if not best_def.empty:
                     df_def = best_def.rename(columns={"TeamName": "Team"}).copy()
                     df_def["PPG A"] = df_def["PPG A"].round(2)
-                    _render_records_table("Top 10 Best Defense (Lowest PPG Against) — Season", df_def, ["Year", "Team", "Owner", "GP", "PPG A"])
+                    _render_records_table("Top 20 Best Defense (Lowest PPG Against) — Season", df_def, ["Year", "Team", "Owner", "GP", "PPG A"])
 
                 # Best differential (PPG F − PPG A)
-                best_diff = reg_pp.sort_values(["PPG Diff"], ascending=False).head(10)
+                best_diff = reg_pp.sort_values(["PPG Diff"], ascending=False).head(20)
                 if not best_diff.empty:
                     df_diff = best_diff.rename(columns={"TeamName": "Team"}).copy()
                     df_diff["PPG Diff"] = df_diff["PPG Diff"].round(2)
-                    _render_records_table("Top 10 Best Points Differential per Game — Season", df_diff, ["Year", "Team", "Owner", "GP", "PPG Diff"])
+                    _render_records_table("Top 20 Best Points Differential per Game — Season", df_diff, ["Year", "Team", "Owner", "GP", "PPG Diff"])
 
     st.subheader("Game Records")
     if df_gl is None or df_gl.empty:
@@ -782,39 +799,39 @@ def render_records(
 
         base_cols = gl.apply(_mk_row, axis=1)
 
-        # Top 10 most points by a single team (with clear team/owner shown)
+        # Top 20 most points by a single team (with clear team/owner shown)
         top_single = pd.concat([base_cols, gl[["MaxTeamDisp", "MaxTeamPoints"]]], axis=1)
-        top_single = top_single.dropna(subset=["MaxTeamPoints"]).sort_values("MaxTeamPoints", ascending=False).head(10)
+        top_single = top_single.dropna(subset=["MaxTeamPoints"]).sort_values("MaxTeamPoints", ascending=False).head(20)
         if not top_single.empty:
             ts = top_single.rename(columns={"MaxTeamDisp": "Team (Owner)", "MaxTeamPoints": "Points"})
-            _render_records_table("Top 10 Most Points by a Team (Game)", ts, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
+            _render_records_table("Top 20 Most Points by a Team (Game)", ts, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
 
-        # Top 10 least points by a single team (include combined points)
+        # Top 20 least points by a single team (include combined points)
         low_single = pd.concat([base_cols, gl[["MinTeamDisp", "MinTeamPoints"]]], axis=1)
-        low_single = low_single.dropna(subset=["MinTeamPoints"]).sort_values("MinTeamPoints", ascending=True).head(10)
+        low_single = low_single.dropna(subset=["MinTeamPoints"]).sort_values("MinTeamPoints", ascending=True).head(20)
         if not low_single.empty:
             ls = low_single.rename(columns={"MinTeamDisp": "Team (Owner)", "MinTeamPoints": "Points"})
-            _render_records_table("Top 10 Least Points by a Team (Game)", ls, ["Team (Owner)", "Points", "Combined", "Year", "Week", "Home", "Away", "Score"])
+            _render_records_table("Top 20 Least Points by a Team (Game)", ls, ["Team (Owner)", "Points", "Combined", "Year", "Week", "Home", "Away", "Score"])
 
         # Most combined points (use base_cols which already contains Combined)
-        most_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=False).head(10)
+        most_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=False).head(20)
         if not most_comb.empty:
-            _render_records_table("Top 10 Most Combined Points (Game)", most_comb, ["Year", "Week", "Home", "Away", "Score", "Combined"])
+            _render_records_table("Top 20 Most Combined Points (Game)", most_comb, ["Year", "Week", "Home", "Away", "Score", "Combined"])
 
         # Least combined points
-        least_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=True).head(10)
+        least_comb = base_cols.dropna(subset=["Combined"]).sort_values("Combined", ascending=True).head(20)
         if not least_comb.empty:
-            _render_records_table("Top 10 Least Combined Points (Game)", least_comb, ["Year", "Week", "Home", "Away", "Score", "Combined"])
+            _render_records_table("Top 20 Least Combined Points (Game)", least_comb, ["Year", "Week", "Home", "Away", "Score", "Combined"])
 
         # Biggest win margin (exclude ties where Margin == 0)
-        biggest = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=False).head(10)
+        biggest = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=False).head(20)
         if not biggest.empty:
-            _render_records_table("Top 10 Biggest Win Margins (Game)", biggest, ["Year", "Week", "Home", "Away", "Score", "Margin"])
+            _render_records_table("Top 20 Biggest Win Margins (Game)", biggest, ["Year", "Week", "Home", "Away", "Score", "Margin"])
 
         # Narrowest win margin (> 0)
-        narrow = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=True).head(10)
+        narrow = base_cols.dropna(subset=["Margin"]).query("Margin > 0").sort_values("Margin", ascending=True).head(20)
         if not narrow.empty:
-            _render_records_table("Top 10 Narrowest Win Margins (Game)", narrow, ["Year", "Week", "Home", "Away", "Score", "Margin"])
+            _render_records_table("Top 20 Narrowest Win Margins (Game)", narrow, ["Year", "Week", "Home", "Away", "Score", "Margin"])
 
         # Highest losing score (team still lost)
         gl["LosingPoints"] = np.where(gl["HomeScore"] > gl["AwayScore"], gl["AwayScore"], np.where(gl["AwayScore"] > gl["HomeScore"], gl["HomeScore"], np.nan))
@@ -823,10 +840,10 @@ def render_records(
             np.where(gl["AwayScore"] > gl["HomeScore"], gl["HomeTeam"].astype(str) + " (" + gl["HomeOwner"].astype(str) + ")", np.nan),
         )
         losing_tbl = pd.concat([base_cols[[c for c in ["Year", "Week", "Home", "Away", "Score"] if c in base_cols.columns]], gl[["LosingTeamDisp", "LosingPoints"]]], axis=1)
-        losing_tbl = losing_tbl.dropna(subset=["LosingPoints"]).sort_values("LosingPoints", ascending=False).head(10)
+        losing_tbl = losing_tbl.dropna(subset=["LosingPoints"]).sort_values("LosingPoints", ascending=False).head(20)
         if not losing_tbl.empty:
             lt = losing_tbl.rename(columns={"LosingTeamDisp": "Team (Owner)", "LosingPoints": "Points"})
-            _render_records_table("Top 10 Highest Scoring Losing Teams (Game)", lt, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
+            _render_records_table("Top 20 Highest Scoring Losing Teams (Game)", lt, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
 
         # Lowest winning score (team still won)
         gl["WinningPoints"] = np.where(gl["HomeScore"] > gl["AwayScore"], gl["HomeScore"], np.where(gl["AwayScore"] > gl["HomeScore"], gl["AwayScore"], np.nan))
@@ -835,10 +852,10 @@ def render_records(
             np.where(gl["AwayScore"] > gl["HomeScore"], gl["AwayTeam"].astype(str) + " (" + gl["AwayOwner"].astype(str) + ")", np.nan),
         )
         winning_tbl = pd.concat([base_cols[[c for c in ["Year", "Week", "Home", "Away", "Score"] if c in base_cols.columns]], gl[["WinningTeamDisp", "WinningPoints"]]], axis=1)
-        winning_tbl = winning_tbl.dropna(subset=["WinningPoints"]).sort_values("WinningPoints", ascending=True).head(10)
+        winning_tbl = winning_tbl.dropna(subset=["WinningPoints"]).sort_values("WinningPoints", ascending=True).head(20)
         if not winning_tbl.empty:
             wt = winning_tbl.rename(columns={"WinningTeamDisp": "Team (Owner)", "WinningPoints": "Points"})
-            _render_records_table("Top 10 Lowest Winning Scores (Game)", wt, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
+            _render_records_table("Top 20 Lowest Winning Scores (Game)", wt, ["Team (Owner)", "Points", "Year", "Week", "Home", "Away", "Score"])
 
     # Longest win streak by owner (overall)
         try:
@@ -880,9 +897,9 @@ def render_records(
                 EndYear=("Year", "last"),
                 EndWeek=("Week", "last"),
             ).reset_index(drop=False)
-            top_streaks = agg.sort_values(["Streak"], ascending=False).head(10)
+            top_streaks = agg.sort_values(["Streak"], ascending=False).head(20)
             if not top_streaks.empty:
-                _render_records_table("Top 10 Longest Win Streaks (Owner)", top_streaks, ["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"])
+                _render_records_table("Top 20 Longest Win Streaks (Owner)", top_streaks, ["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"])
             else:
                 st.info("No win streaks found for current filters.")
         except Exception:
@@ -923,9 +940,9 @@ def render_records(
                 EndYear=("Year", "last"),
                 EndWeek=("Week", "last"),
             ).reset_index(drop=False)
-            top_losing = agg2.sort_values(["Streak"], ascending=False).head(10)
+            top_losing = agg2.sort_values(["Streak"], ascending=False).head(20)
             if not top_losing.empty:
-                _render_records_table("Top 10 Longest Losing Streaks (Owner)", top_losing, ["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"])
+                _render_records_table("Top 20 Longest Losing Streaks (Owner)", top_losing, ["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"])
             else:
                 st.info("No losing streaks found for current filters.")
         except Exception:
@@ -2386,7 +2403,7 @@ def render_regular_season(df_reg, selected_years, selected_teams, selected_owner
         [
             c for c in [
                 "Year", "TeamName", "Owner", "Wins", "Losses", "T", "Ties",
-                "PointsFor", "PointsAgainst", "Seed", "Pct"
+                "PointsFor", "PointsAgainst", "Expected Points", "Actual - Expected", "Seed", "Pct"
             ] if c in df.columns
         ],
     )
@@ -3251,6 +3268,24 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
     ])
     if lb.empty:
         st.info("No ratings could be computed from the selected data.")
+        return
+
+    # Keep only owners active within the last two seasons (based on Year field)
+    latest_year = d["_Y"].max()
+    if pd.notna(latest_year):
+        cutoff_year = latest_year - 1  # include current season and prior season
+        recent = d[d["_Y"].notna() & (d["_Y"] >= cutoff_year)]
+        if not recent.empty:
+            recent_owners = set(
+                pd.concat([
+                    recent[ent_a_col].dropna().astype(str),
+                    recent[ent_b_col].dropna().astype(str),
+                ]).unique()
+            )
+            lb = lb[lb["Owner"].isin(recent_owners)]
+
+    if lb.empty:
+        st.info("No ratings for owners active within the last two seasons.")
         return
     lb = lb.sort_values(["Elo", "Wins", "Games"], ascending=[False, False, False])
 

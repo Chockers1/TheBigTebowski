@@ -24,6 +24,7 @@ import os
 import urllib.request
 import zipfile
 from typing import Dict, List, Optional, Tuple
+from datetime import datetime
 import hashlib
 
 import pandas as pd
@@ -865,18 +866,29 @@ def render_records(
                 "Year": gl.get("Year"),
                 "Week": gl.get("Week"),
                 "Win": gl.get("HomeScore") > gl.get("AwayScore"),
+                "PointsFor": gl.get("HomeScore"),
+                "PointsAgainst": gl.get("AwayScore"),
             })
             b = pd.DataFrame({
                 "Owner": gl.get("AwayOwner"),
                 "Year": gl.get("Year"),
                 "Week": gl.get("Week"),
                 "Win": gl.get("AwayScore") > gl.get("HomeScore"),
+                "PointsFor": gl.get("AwayScore"),
+                "PointsAgainst": gl.get("HomeScore"),
             })
             long = pd.concat([a, b], ignore_index=True)
             long["Year"] = pd.to_numeric(long["Year"], errors="coerce")
             long["Week"] = pd.to_numeric(long["Week"], errors="coerce")
+            long["PointsFor"] = pd.to_numeric(long["PointsFor"], errors="coerce")
+            long["PointsAgainst"] = pd.to_numeric(long["PointsAgainst"], errors="coerce")
             long = long.dropna(subset=["Owner", "Year", "Week"])  # keep valid rows only
             long = long.sort_values(["Owner", "Year", "Week"])  # chronological
+            long["Margin"] = long["PointsFor"] - long["PointsAgainst"]
+            long["SeasonAvgPoints"] = long.groupby("Year")["PointsFor"].transform("mean")
+            long["Streak_100"] = long["PointsFor"] >= 100
+            long["Streak_margin10"] = long["Margin"] >= 10
+            long["Streak_above_avg"] = long["PointsFor"] >= long["SeasonAvgPoints"]
 
             # Compute run-lengths of consecutive wins per owner
             def _streaks(g: pd.DataFrame) -> pd.DataFrame:
@@ -900,6 +912,175 @@ def render_records(
             top_streaks = agg.sort_values(["Streak"], ascending=False).head(20)
             if not top_streaks.empty:
                 _render_records_table("Top 20 Longest Win Streaks (Owner)", top_streaks, ["Owner", "Streak", "StartYear", "StartWeek", "EndYear", "EndWeek"])
+
+                # Additional streak insights
+                try:
+                    st.markdown("#### Streak insights")
+
+                    def _season_week_to_datetime(year: float | int, week: float | int) -> Optional[datetime]:
+                        try:
+                            y = int(year)
+                        except (TypeError, ValueError):
+                            return None
+                        try:
+                            w = int(week)
+                            if w <= 0:
+                                w = 1
+                        except (TypeError, ValueError):
+                            w = 1
+                        try:
+                            return datetime.fromisocalendar(y, min(max(w, 1), 53), 1)
+                        except ValueError:
+                            # Fallback: treat as first week of year
+                            return datetime(y, 1, 1)
+
+                    all_years = pd.concat([
+                        top_streaks["StartYear"],
+                        top_streaks["EndYear"],
+                    ], ignore_index=True)
+                    season_options = sorted({int(v) for v in all_years.dropna().astype(int)})
+                    selected_seasons = st.multiselect(
+                        "Highlight streak seasons",
+                        options=season_options,
+                        default=season_options,
+                        key="streak_season_filter",
+                    ) if season_options else []
+
+                    if selected_seasons:
+                        streak_display = top_streaks[
+                            top_streaks["StartYear"].isin(selected_seasons) | top_streaks["EndYear"].isin(selected_seasons)
+                        ]
+                    else:
+                        streak_display = top_streaks
+
+                    # Active streaks table
+                    last_rows = (
+                        seg.sort_values(["Owner", "Year", "Week"], kind="mergesort")
+                        .groupby("Owner", as_index=False)
+                        .tail(1)
+                    )
+                    active_wins = last_rows[last_rows["is_win_seg"]]
+                    if not active_wins.empty:
+                        active_wins = active_wins.merge(agg, on=["Owner", "seg"], how="left")
+                        active_cols = ["Owner", "Streak", "StartYear", "StartWeek"]
+                        active_table = active_wins[active_cols].sort_values(["Streak", "Owner"], ascending=[False, True])
+                        active_table = active_table.rename(columns={"Streak": "ActiveWinStreak"})
+                        st.dataframe(
+                            active_table,
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                    else:
+                        st.info("No active winning streaks detected.")
+
+                    def _compute_condition_streaks(flag_column: str) -> Tuple[pd.DataFrame, pd.DataFrame]:
+                        base = long[["Owner", "Year", "Week", flag_column]].copy()
+                        if base.empty:
+                            return pd.DataFrame(), pd.DataFrame()
+                        base[flag_column] = base[flag_column].fillna(False).astype(bool)
+                        base = base.sort_values(["Owner", "Year", "Week"]).reset_index(drop=True)
+
+                        def _mark_segments(group: pd.DataFrame) -> pd.DataFrame:
+                            seg_ids = (group[flag_column] != group[flag_column].shift()).cumsum()
+                            out = group.copy()
+                            out["seg"] = seg_ids
+                            return out
+
+                        flagged = base.groupby("Owner", group_keys=False).apply(_mark_segments).reset_index(drop=True)
+                        hits = flagged[flagged[flag_column]]
+                        if hits.empty:
+                            return pd.DataFrame(), pd.DataFrame()
+                        agg_all = hits.groupby(["Owner", "seg"]).agg(
+                            Streak=(flag_column, "size"),
+                            StartYear=("Year", "first"),
+                            StartWeek=("Week", "first"),
+                            EndYear=("Year", "last"),
+                            EndWeek=("Week", "last"),
+                        ).reset_index()
+                        agg_all = agg_all.sort_values(["Streak", "Owner"], ascending=[False, True])
+                        top_table = agg_all.head(20).drop(columns=["seg"]).rename(columns={"Streak": "ConsecutiveGames"})
+
+                        last_rows = flagged.groupby("Owner", as_index=False).tail(1)
+                        active = last_rows[last_rows[flag_column]].merge(agg_all, on=["Owner", "seg"], how="left")
+                        if not active.empty:
+                            active = active.rename(columns={
+                                "Year": "LastYear",
+                                "Week": "LastWeek",
+                                "Streak": "ActiveStreak",
+                            })
+                            active = active.drop(columns=[flag_column, "seg"])
+                            active = active.sort_values(["ActiveStreak", "Owner"], ascending=[False, True])
+                        else:
+                            active = pd.DataFrame()
+                        return top_table, active
+
+                    st.markdown("##### Consistency streaks")
+                    consistency_definitions: List[Tuple[str, str]] = [
+                        ("100+ points", "Streak_100"),
+                        ("10+ point wins", "Streak_margin10"),
+                        ("Above season average", "Streak_above_avg"),
+                    ]
+                    tabs = st.tabs([label for label, _ in consistency_definitions])
+                    for tab, (label, col_name) in zip(tabs, consistency_definitions):
+                        with tab:
+                            top_consistency, active_consistency = _compute_condition_streaks(col_name)
+                            if active_consistency is not None and not active_consistency.empty:
+                                st.caption("Active streaks")
+                                st.dataframe(
+                                    active_consistency,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            else:
+                                st.info(f"No active streaks for {label.lower()} detected.")
+                            if top_consistency is not None and not top_consistency.empty:
+                                st.caption("Top streaks (last 20)")
+                                st.dataframe(
+                                    top_consistency,
+                                    use_container_width=True,
+                                    hide_index=True,
+                                )
+                            else:
+                                st.info(f"No historical streaks found for {label.lower()}.")
+
+                    if not streak_display.empty:
+                        timeline = streak_display.copy()
+                        timeline["StartDate"] = timeline.apply(lambda r: _season_week_to_datetime(r["StartYear"], r["StartWeek"]), axis=1)
+                        timeline["EndDate"] = timeline.apply(lambda r: _season_week_to_datetime(r["EndYear"], r["EndWeek"]), axis=1)
+                        timeline = timeline.dropna(subset=["StartDate", "EndDate"])
+                        if not timeline.empty:
+                            colors = px.colors.qualitative.Plotly
+                            fig_timeline = go.Figure()
+                            owners_with_legend: set[str] = set()
+                            for idx, (owner, chunk) in enumerate(timeline.groupby("Owner")):
+                                color = colors[idx % len(colors)]
+                                for _, row in chunk.iterrows():
+                                    fig_timeline.add_trace(
+                                        go.Scatter(
+                                            x=[row["StartDate"], row["EndDate"]],
+                                            y=[owner, owner],
+                                            mode="lines",
+                                            line=dict(width=6, color=color),
+                                            name=owner,
+                                            showlegend=owner not in owners_with_legend,
+                                            hovertemplate=(
+                                                f"Owner: {owner}<br>"
+                                                f"Streak: {int(row['Streak'])} wins<br>"
+                                                f"Start: {row['StartYear']} W{int(row['StartWeek']) if pd.notna(row['StartWeek']) else 0}<br>"
+                                                f"End: {row['EndYear']} W{int(row['EndWeek']) if pd.notna(row['EndWeek']) else 0}<extra></extra>"
+                                            ),
+                                        )
+                                    )
+                                owners_with_legend.add(owner)
+                            fig_timeline.update_layout(
+                                title="Winning streak timeline",
+                                xaxis_title="Season",
+                                yaxis_title="Owner",
+                                showlegend=False,
+                            )
+                            safe_chart(fig_timeline)
+                except Exception:
+                    pass
             else:
                 st.info("No win streaks found for current filters.")
         except Exception:
@@ -2386,7 +2567,7 @@ def render_championships(df_ch, selected_years, selected_teams, selected_owners)
         _render_record_cards("Toilet Bowl", tb_rec)
 
 
-def render_regular_season(df_reg, selected_years, selected_teams, selected_owners):
+def render_regular_season(df_reg, selected_years, selected_teams, selected_owners, df_gl: Optional[pd.DataFrame] = None):
     st.subheader("Regular Season")
     if df_reg is None or df_reg.empty:
         st.info("reg_season_tables sheet not found or empty.")
@@ -2623,6 +2804,430 @@ def render_regular_season(df_reg, selected_years, selected_teams, selected_owner
         else:
             st.info("No owner-based season records could be computed.")
 
+    if df_gl is not None and not df_gl.empty:
+        st.markdown("### Season progression dash")
+        try:
+            games = apply_year_team_owner_filters(df_gl, selected_years, selected_teams, selected_owners)
+            required = {"Year", "Week", "HomeOwner", "AwayOwner", "HomeScore", "AwayScore"}
+            if not required.issubset(games.columns):
+                st.info("Need Year, Week, owner, and score columns in gamelog to build weekly standings.")
+            else:
+                work = games.copy()
+                work["Year"] = pd.to_numeric(work["Year"], errors="coerce")
+                work["Week"] = pd.to_numeric(work["Week"], errors="coerce")
+                work["HomeScore"] = pd.to_numeric(work["HomeScore"], errors="coerce")
+                work["AwayScore"] = pd.to_numeric(work["AwayScore"], errors="coerce")
+                work = work.dropna(subset=["Year", "Week", "HomeScore", "AwayScore", "HomeOwner", "AwayOwner"])
+                if work.empty:
+                    st.info("No completed games remain for the current filters.")
+                else:
+                    regular_season_cutoff = 14  # playoffs begin Week 15 per league rules
+                    work = work[work["Week"] <= regular_season_cutoff]
+                    if work.empty:
+                        st.info("No regular-season games (Weeks 1-14) remain after applying the current filters.")
+                        return
+                    work["Year"] = work["Year"].astype(int)
+                    work["Week"] = work["Week"].astype(int)
+                    work["HomeOwner"] = work["HomeOwner"].astype(str)
+                    work["AwayOwner"] = work["AwayOwner"].astype(str)
+
+                    home = work[["Year", "Week", "HomeOwner", "HomeScore", "AwayScore"]].copy()
+                    home.columns = ["Year", "Week", "Owner", "PointsFor", "PointsAgainst"]
+                    home["Win"] = (home["PointsFor"] > home["PointsAgainst"]).astype(int)
+                    home["Loss"] = (home["PointsFor"] < home["PointsAgainst"]).astype(int)
+                    home["Tie"] = (home["PointsFor"] == home["PointsAgainst"]).astype(int)
+
+                    away = work[["Year", "Week", "AwayOwner", "AwayScore", "HomeScore"]].copy()
+                    away.columns = ["Year", "Week", "Owner", "PointsFor", "PointsAgainst"]
+                    away["Win"] = (away["PointsFor"] > away["PointsAgainst"]).astype(int)
+                    away["Loss"] = (away["PointsFor"] < away["PointsAgainst"]).astype(int)
+                    away["Tie"] = (away["PointsFor"] == away["PointsAgainst"]).astype(int)
+
+                    long_games = pd.concat([home, away], ignore_index=True)
+                    weekly = (
+                        long_games.groupby(["Year", "Week", "Owner"], as_index=False)
+                        .agg(
+                            WeekWins=("Win", "sum"),
+                            WeekLosses=("Loss", "sum"),
+                            WeekTies=("Tie", "sum"),
+                            WeekPointsFor=("PointsFor", "sum"),
+                            WeekPointsAgainst=("PointsAgainst", "sum"),
+                            WeekGames=("Win", "size"),
+                        )
+                    )
+                    if weekly.empty:
+                        st.info("No weekly head-to-head results available after filtering.")
+                    else:
+                        season_frames: List[pd.DataFrame] = []
+                        for year in sorted(long_games["Year"].unique()):
+                            season_slice = long_games[long_games["Year"] == year]
+                            owners = sorted(season_slice["Owner"].unique())
+                            weeks = sorted(season_slice["Week"].unique())
+                            if not owners or not weeks:
+                                continue
+                            prod_index = pd.MultiIndex.from_product([[year], weeks, owners], names=["Year", "Week", "Owner"])
+                            expanded = pd.DataFrame(index=prod_index).reset_index()
+                            expanded = expanded.merge(weekly, on=["Year", "Week", "Owner"], how="left")
+                            for col in [
+                                "WeekWins",
+                                "WeekLosses",
+                                "WeekTies",
+                                "WeekPointsFor",
+                                "WeekPointsAgainst",
+                                "WeekGames",
+                            ]:
+                                expanded[col] = expanded[col].fillna(0)
+                            season_frames.append(expanded)
+
+                        if not season_frames:
+                            st.info("Unable to rebuild weekly standings for the selected seasons.")
+                        else:
+                            standings = pd.concat(season_frames, ignore_index=True)
+                            standings = standings.sort_values(["Year", "Owner", "Week"]).reset_index(drop=True)
+                            group_keys = ["Year", "Owner"]
+                            standings["CumWins"] = standings.groupby(group_keys)["WeekWins"].cumsum()
+                            standings["CumLosses"] = standings.groupby(group_keys)["WeekLosses"].cumsum()
+                            standings["CumTies"] = standings.groupby(group_keys)["WeekTies"].cumsum()
+                            standings["CumGames"] = standings["CumWins"] + standings["CumLosses"] + standings["CumTies"]
+                            standings["CumPointsFor"] = standings.groupby(group_keys)["WeekPointsFor"].cumsum()
+                            standings["CumPointsAgainst"] = standings.groupby(group_keys)["WeekPointsAgainst"].cumsum()
+                            standings["CumPointsDiff"] = standings["CumPointsFor"] - standings["CumPointsAgainst"]
+                            standings["CumWinPct"] = np.where(
+                                standings["CumGames"] > 0,
+                                (standings["CumWins"] + 0.5 * standings["CumTies"]) / standings["CumGames"],
+                                np.nan,
+                            )
+
+                            order_cols = ["Year", "Week", "CumWins", "CumWinPct", "CumPointsDiff", "Owner"]
+                            ranked = standings.sort_values(order_cols, ascending=[True, True, False, False, False, True]).copy()
+                            ranked["Rank"] = ranked.groupby(["Year", "Week"]).cumcount() + 1
+                            standings = ranked.sort_values(["Year", "Owner", "Week"]).reset_index(drop=True)
+                            standings["RankChange"] = standings.groupby(group_keys)["Rank"].diff()
+                            standings["Week"] = standings["Week"].astype(int)
+
+                            def _compute_weekly_elo(df_games: pd.DataFrame, initial: float = 1000.0, k_factor: float = 32.0) -> pd.DataFrame:
+                                if df_games is None or df_games.empty:
+                                    return pd.DataFrame()
+                                dfp = df_games.copy()
+                                for col in ["Year", "Week", "HomeScore", "AwayScore"]:
+                                    dfp[col] = pd.to_numeric(dfp[col], errors="coerce")
+                                dfp = dfp.dropna(subset=["Year", "Week", "HomeScore", "AwayScore", "HomeOwner", "AwayOwner"])
+                                if dfp.empty:
+                                    return pd.DataFrame()
+                                dfp["Year"] = dfp["Year"].astype(int)
+                                dfp["Week"] = dfp["Week"].astype(int)
+                                dfp["HomeOwner"] = dfp["HomeOwner"].astype(str)
+                                dfp["AwayOwner"] = dfp["AwayOwner"].astype(str)
+                                dfp = dfp.sort_values(["Year", "Week"]).reset_index(drop=True)
+
+                                ratings: Dict[str, float] = {}
+                                records: List[Dict[str, float | int | str]] = []
+
+                                def _expected(elo_a: float, elo_b: float) -> float:
+                                    return 1.0 / (1.0 + 10 ** ((elo_b - elo_a) / 400.0))
+
+                                for _, game in dfp.iterrows():
+                                    home = game["HomeOwner"]
+                                    away = game["AwayOwner"]
+                                    ra = ratings.get(home, float(initial))
+                                    rb = ratings.get(away, float(initial))
+                                    hs = float(game["HomeScore"])
+                                    as_ = float(game["AwayScore"])
+                                    if not np.isfinite(hs) or not np.isfinite(as_):
+                                        continue
+                                    if hs > as_:
+                                        res_home = 1.0
+                                    elif as_ > hs:
+                                        res_home = 0.0
+                                    else:
+                                        res_home = 0.5
+                                    exp_home = _expected(ra, rb)
+                                    exp_away = 1.0 - exp_home
+                                    new_home = ra + k_factor * (res_home - exp_home)
+                                    new_away = rb + k_factor * ((1.0 - res_home) - exp_away)
+                                    ratings[home] = new_home
+                                    ratings[away] = new_away
+                                    year = int(game["Year"])
+                                    week = int(game["Week"])
+                                    records.append({"Year": year, "Week": week, "Owner": home, "Elo": float(new_home)})
+                                    records.append({"Year": year, "Week": week, "Owner": away, "Elo": float(new_away)})
+
+                                elo_df = pd.DataFrame(records)
+                                if elo_df.empty:
+                                    return elo_df
+                                elo_df = (
+                                    elo_df.sort_values(["Owner", "Year", "Week"])
+                                    .drop_duplicates(subset=["Owner", "Year", "Week"], keep="last")
+                                    .reset_index(drop=True)
+                                )
+                                return elo_df
+
+                            weekly_elo = _compute_weekly_elo(work)
+                            if not weekly_elo.empty:
+                                standings = standings.merge(weekly_elo, on=["Year", "Week", "Owner"], how="left")
+                                standings["Elo"] = standings.groupby(group_keys)["Elo"].ffill().fillna(1000.0)
+                            else:
+                                standings["Elo"] = 1000.0
+
+                            season_owner_counts = standings.groupby("Year")["Owner"].nunique().to_dict()
+                            max_teams = int(max(season_owner_counts.values())) if season_owner_counts else 4
+                            league_default_playoff_spots = 6
+                            playoff_default = min(league_default_playoff_spots, max_teams) if max_teams >= 2 else max_teams
+                            st.caption("League baseline: 12 teams, top 6 advance, playoffs start Week 15.")
+                            max_slider = max(2, min(12, max_teams)) if max_teams else 12
+                            playoff_spots = st.slider(
+                                "Playoff berths per season",
+                                min_value=2,
+                                max_value=max_slider,
+                                value=min(max_slider, max(2, playoff_default)) if playoff_default else min(max_slider, 2),
+                                help="Used to flag clinch and elimination weeks. Adjust to match your league format.",
+                            )
+
+                            clinch_rows: List[Dict[str, Optional[int]]] = []
+                            for (year, owner), season_data in standings.groupby(group_keys):
+                                cutoff = min(playoff_spots, season_owner_counts.get(year, playoff_spots))
+                                season_data = season_data.sort_values("Week")
+                                clinched_week: Optional[int] = None
+                                eliminated_week: Optional[int] = None
+                                for _, row in season_data.iterrows():
+                                    if row["Rank"] <= cutoff and (season_data.loc[season_data["Week"] >= row["Week"], "Rank"] <= cutoff).all():
+                                        clinched_week = int(row["Week"])
+                                        break
+                                for _, row in season_data.iterrows():
+                                    if row["Rank"] > cutoff and (season_data.loc[season_data["Week"] >= row["Week"], "Rank"] > cutoff).all():
+                                        eliminated_week = int(row["Week"])
+                                        break
+                                clinch_rows.append({
+                                    "Year": int(year),
+                                    "Owner": owner,
+                                    "ClinchedWeek": clinched_week,
+                                    "EliminatedWeek": eliminated_week,
+                                })
+                            clinch_df = pd.DataFrame(clinch_rows)
+
+                            season_options = sorted(standings["Year"].unique().tolist())
+                            season_choice = st.selectbox(
+                                "Season to explore",
+                                options=season_options,
+                                format_func=lambda x: str(int(x)),
+                            )
+                            season_df = standings[standings["Year"] == season_choice].copy()
+                            season_df = season_df.sort_values(["Owner", "Week"])
+                            owners_in_season = season_df["Owner"].unique().tolist()
+                            final_week = season_df["Week"].max()
+                            final_snapshot = season_df[season_df["Week"] == final_week].sort_values("Rank")
+                            default_owner_count = min(6, len(owners_in_season)) if owners_in_season else 0
+                            default_owners = final_snapshot["Owner"].head(default_owner_count).tolist() if default_owner_count else owners_in_season
+                            owner_selection = st.multiselect(
+                                "Owners to plot",
+                                options=owners_in_season,
+                                default=owners_in_season,
+                                key=f"progression_owner_select_{season_choice}",
+                            )
+
+                            if not owner_selection:
+                                owner_selection = owners_in_season
+
+                            if owner_selection:
+                                plot_df = season_df[season_df["Owner"].isin(owner_selection)].copy()
+                                hover_map = {
+                                    "CumWins": True,
+                                    "CumLosses": True,
+                                    "CumTies": True,
+                                    "CumWinPct": ":.3f",
+                                    "CumPointsFor": True,
+                                    "CumPointsAgainst": True,
+                                }
+                                fig = px.line(
+                                    plot_df,
+                                    x="Week",
+                                    y="Rank",
+                                    color="Owner",
+                                    markers=True,
+                                    title=f"Weekly standings trajectory – {int(season_choice)}",
+                                    hover_data=hover_map,
+                                )
+                                fig.update_yaxes(autorange="reversed", dtick=1, title_text="Rank (1 = top)")
+                                fig.update_xaxes(title_text="Week")
+
+                                season_clinch = clinch_df[clinch_df["Year"] == int(season_choice)] if not clinch_df.empty else pd.DataFrame()
+                                legend_added: Dict[str, bool] = {}
+                                for _, row in season_clinch.iterrows():
+                                    owner = row["Owner"]
+                                    if owner not in owner_selection:
+                                        continue
+                                    if pd.notna(row.get("ClinchedWeek")):
+                                        week_val = int(row["ClinchedWeek"])
+                                        rank_val = plot_df.loc[(plot_df["Owner"] == owner) & (plot_df["Week"] == week_val), "Rank"]
+                                        if not rank_val.empty:
+                                            fig.add_trace(
+                                                go.Scatter(
+                                                    x=[week_val],
+                                                    y=[rank_val.iloc[0]],
+                                                    mode="markers",
+                                                    marker=dict(symbol="star", size=12, color="#059669"),
+                                                    name=f"{owner} clinched" if not legend_added.get(f"{owner}-clinched") else None,
+                                                    showlegend=not legend_added.get(f"{owner}-clinched"),
+                                                )
+                                            )
+                                            legend_added[f"{owner}-clinched"] = True
+                                    if pd.notna(row.get("EliminatedWeek")):
+                                        week_val = int(row["EliminatedWeek"])
+                                        rank_val = plot_df.loc[(plot_df["Owner"] == owner) & (plot_df["Week"] == week_val), "Rank"]
+                                        if not rank_val.empty:
+                                            fig.add_trace(
+                                                go.Scatter(
+                                                    x=[week_val],
+                                                    y=[rank_val.iloc[0]],
+                                                    mode="markers",
+                                                    marker=dict(symbol="x", size=11, color="#dc2626"),
+                                                    name=f"{owner} eliminated" if not legend_added.get(f"{owner}-elim") else None,
+                                                    showlegend=not legend_added.get(f"{owner}-elim"),
+                                                )
+                                            )
+                                            legend_added[f"{owner}-elim"] = True
+                                safe_chart(fig)
+
+                                st.markdown("#### Weekly power index")
+                                season_power = season_df.copy()
+                                if not season_power.empty:
+                                    season_power = season_power.sort_values(["Owner", "Week"]).reset_index(drop=True)
+                                    season_power["Elo"] = season_power.groupby("Owner")["Elo"].ffill().fillna(1000.0)
+                                    season_power["CumWinPct"] = season_power["CumWinPct"].fillna(0.5)
+                                    season_power["CumPointsDiff"] = season_power["CumPointsDiff"].fillna(0.0)
+                                    season_power["CumGames"] = season_power["CumGames"].fillna(0)
+                                    season_power["AvgMargin"] = np.where(
+                                        season_power["CumGames"] > 0,
+                                        season_power["CumPointsDiff"] / season_power["CumGames"],
+                                        0.0,
+                                    )
+
+                                    def _normalize_series(series: pd.Series) -> pd.Series:
+                                        arr = series.replace([np.inf, -np.inf], np.nan)
+                                        finite = arr.dropna()
+                                        if finite.empty:
+                                            return pd.Series(0.5, index=series.index)
+                                        min_val = float(finite.min())
+                                        max_val = float(finite.max())
+                                        if np.isclose(min_val, max_val):
+                                            return pd.Series(0.5, index=series.index)
+                                        normed = (arr - min_val) / (max_val - min_val)
+                                        return normed.fillna(0.5)
+
+                                    season_power["WinScore"] = season_power.groupby("Week")["CumWinPct"].transform(_normalize_series)
+                                    season_power["EloScore"] = season_power.groupby("Week")["Elo"].transform(_normalize_series)
+                                    season_power["MarginScore"] = season_power.groupby("Week")["AvgMargin"].transform(_normalize_series)
+                                    season_power["PowerIndex"] = (
+                                        0.5 * season_power["WinScore"]
+                                        + 0.3 * season_power["EloScore"]
+                                        + 0.2 * season_power["MarginScore"]
+                                    )
+                                    season_power = season_power.sort_values(["Week", "PowerIndex"], ascending=[True, False])
+                                    season_power["PowerRank"] = season_power.groupby("Week")["PowerIndex"].rank(ascending=False, method="dense")
+
+                                    power_plot = season_power[season_power["Owner"].isin(owner_selection)].copy()
+                                    if not power_plot.empty:
+                                        st.caption("Composite: 50% win%, 30% Elo, 20% scoring margin (per week).")
+                                        power_fig = px.line(
+                                            power_plot,
+                                            x="Week",
+                                            y="PowerRank",
+                                            color="Owner",
+                                            markers=True,
+                                            title=f"Power index rank – {int(season_choice)}",
+                                            hover_data={
+                                                "PowerIndex":":.3f",
+                                                "CumWinPct":":.3f",
+                                                "Elo":":.0f",
+                                                "AvgMargin":":.1f",
+                                            },
+                                        )
+                                        power_fig.update_yaxes(autorange="reversed", dtick=1, title_text="Power rank (1 = best)")
+                                        power_fig.update_xaxes(title_text="Week")
+                                        safe_chart(power_fig)
+
+                                        available_weeks = sorted(power_plot["Week"].dropna().astype(int).unique().tolist())
+                                        if available_weeks:
+                                            snapshot_week = st.slider(
+                                                "Power index snapshot week",
+                                                min_value=available_weeks[0],
+                                                max_value=available_weeks[-1],
+                                                value=available_weeks[-1],
+                                                step=1,
+                                                key=f"power_week_snapshot_{season_choice}",
+                                            )
+                                            snapshot = power_plot[power_plot["Week"] == snapshot_week].sort_values("PowerIndex", ascending=False)
+                                            if not snapshot.empty:
+                                                display_cols = [
+                                                    "Owner",
+                                                    "PowerRank",
+                                                    "PowerIndex",
+                                                    "CumWinPct",
+                                                    "Elo",
+                                                    "AvgMargin",
+                                                ]
+                                                snapshot = snapshot[display_cols].copy()
+                                                snapshot["PowerIndex"] = snapshot["PowerIndex"].round(3)
+                                                snapshot["CumWinPct"] = snapshot["CumWinPct"].round(3)
+                                                snapshot["Elo"] = snapshot["Elo"].round(0).astype(int)
+                                                snapshot["AvgMargin"] = snapshot["AvgMargin"].round(1)
+                                                st.dataframe(snapshot, use_container_width=True, hide_index=True)
+
+                                        season_peaks = (
+                                            power_plot.sort_values("PowerIndex", ascending=False)
+                                            .groupby("Owner", as_index=False)
+                                            .first()
+                                            .sort_values("PowerIndex", ascending=False)
+                                        )
+                                        if not season_peaks.empty:
+                                            peak_cols = ["Owner", "Week", "PowerIndex", "PowerRank", "CumWinPct", "Elo", "AvgMargin"]
+                                            peaks = season_peaks[peak_cols].copy()
+                                            peaks["PowerIndex"] = peaks["PowerIndex"].round(3)
+                                            peaks["CumWinPct"] = peaks["CumWinPct"].round(3)
+                                            peaks["Elo"] = peaks["Elo"].round(0).astype(int)
+                                            peaks["AvgMargin"] = peaks["AvgMargin"].round(1)
+                                            st.caption("Best weekly peak per owner")
+                                            st.dataframe(peaks, use_container_width=True, hide_index=True)
+                                    else:
+                                        st.info("No power index data available for the selected owners.")
+                                else:
+                                    st.info("Not enough data to compute the weekly power index.")
+                            else:
+                                st.info("Pick at least one owner to plot the standings trajectory.")
+
+                            season_clinch = clinch_df[clinch_df["Year"] == int(season_choice)] if not clinch_df.empty else pd.DataFrame()
+                            if not season_clinch.empty:
+                                st.markdown("#### Playoff race milestones")
+                                display_cols = ["Owner", "ClinchedWeek", "EliminatedWeek"]
+                                st.dataframe(season_clinch[display_cols], use_container_width=True, hide_index=True)
+
+                            movement = standings.dropna(subset=["RankChange"]).copy()
+                            if not movement.empty:
+                                st.markdown("#### Weekly rank swings")
+                                movement["RankChange"] = movement["RankChange"].astype(float)
+                                gainers = movement.sort_values("RankChange").head(5)
+                                sliders = movement.sort_values("RankChange", ascending=False).head(5)
+                                col_up, col_down = st.columns(2)
+                                with col_up:
+                                    st.caption("Biggest climbs (negative = improved rank)")
+                                    st.dataframe(
+                                        gainers[["Year", "Owner", "Week", "Rank", "RankChange"]],
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                                with col_down:
+                                    st.caption("Biggest drops")
+                                    st.dataframe(
+                                        sliders[["Year", "Owner", "Week", "Rank", "RankChange"]],
+                                        use_container_width=True,
+                                        hide_index=True,
+                                    )
+                        
+        except Exception:
+            st.info("Could not generate the progression dashboard with the current dataset.")
+    else:
+        st.info("Load the gamelog sheet to explore the season progression dashboard.")
+
     # Removed per user request: Points For (Total) and Wins vs Points For charts
 
 
@@ -2751,14 +3356,17 @@ def render_draft(df_draft, df_teams_owners, df_reg, selected_years, selected_tea
         st.info("Not enough data to compute average Round 1 draft position by owner.")
 
     # Draft position vs Regular Season performance (join on Year + Owner)
-    st.markdown("### Draft position vs regular-season Win%")
+    st.markdown("### Draft position vs regular-season outcomes")
     if df_reg is not None and not df_reg.empty and "Owner" in df_round1.columns:
         reg = df_reg.copy()
-        # Aggregate to Owner-Year with best Seed (min) and totals
-        for c in ["Year", "Seed", "Wins", "Losses", "PointsFor", "PointsAgainst"]:
+        for c in ["Year", "Seed", "Wins", "Losses", "PointsFor", "PointsAgainst", "Expected Points"]:
             if c in reg.columns:
                 reg[c] = pd.to_numeric(reg[c], errors="coerce")
-        # Handle optional ties column
+        if "Actual - Expected" in reg.columns and "ActualMinusExpected" not in reg.columns:
+            reg["ActualMinusExpected"] = pd.to_numeric(reg["Actual - Expected"], errors="coerce")
+        elif "ActualMinusExpected" in reg.columns:
+            reg["ActualMinusExpected"] = pd.to_numeric(reg["ActualMinusExpected"], errors="coerce")
+
         ties_col = None
         if "T" in reg.columns:
             ties_col = "T"
@@ -2768,63 +3376,172 @@ def render_draft(df_draft, df_teams_owners, df_reg, selected_years, selected_tea
             reg["Ties"] = pd.to_numeric(reg[ties_col], errors="coerce").fillna(0)
         else:
             reg["Ties"] = 0
-        reg_grp = reg.groupby(["Owner", "Year"]).agg(
-            Seed=("Seed", "min") if "Seed" in reg.columns else ("Wins", "size"),
-            Wins=("Wins", "sum") if "Wins" in reg.columns else ("Owner", "size"),
-            Losses=("Losses", "sum") if "Losses" in reg.columns else ("Owner", "size"),
-            Ties=("Ties", "sum"),
-            PointsFor=("PointsFor", "sum") if "PointsFor" in reg.columns else ("Owner", "size"),
-            PointsAgainst=("PointsAgainst", "sum") if "PointsAgainst" in reg.columns else ("Owner", "size"),
-        ).reset_index()
 
-        # Compute Win%
+        agg_dict = {}
+        agg_dict["Seed"] = ("Seed", "min") if "Seed" in reg.columns else ("Wins", "size")
+        agg_dict["Wins"] = ("Wins", "sum") if "Wins" in reg.columns else ("Owner", "size")
+        agg_dict["Losses"] = ("Losses", "sum") if "Losses" in reg.columns else ("Owner", "size")
+        agg_dict["Ties"] = ("Ties", "sum")
+        if "PointsFor" in reg.columns:
+            agg_dict["PointsFor"] = ("PointsFor", "sum")
+        if "PointsAgainst" in reg.columns:
+            agg_dict["PointsAgainst"] = ("PointsAgainst", "sum")
+        if "Expected Points" in reg.columns:
+            agg_dict["ExpectedPoints"] = ("Expected Points", "sum")
+        if "ActualMinusExpected" in reg.columns:
+            agg_dict["ActualMinusExpected"] = ("ActualMinusExpected", "sum")
+
+        reg_grp = reg.groupby(["Owner", "Year"]).agg(**agg_dict).reset_index()
+
         if {"Wins", "Losses"}.issubset(reg_grp.columns):
             reg_grp["Wins"] = pd.to_numeric(reg_grp["Wins"], errors="coerce").fillna(0)
             reg_grp["Losses"] = pd.to_numeric(reg_grp["Losses"], errors="coerce").fillna(0)
             reg_grp["Ties"] = pd.to_numeric(reg_grp["Ties"], errors="coerce").fillna(0)
             reg_grp["Games"] = reg_grp["Wins"] + reg_grp["Losses"] + reg_grp["Ties"]
-            reg_grp["WinPct"] = np.where(reg_grp["Games"] > 0, (reg_grp["Wins"] + 0.5 * reg_grp["Ties"]) / reg_grp["Games"], np.nan)
+            reg_grp["WinPct"] = np.where(
+                reg_grp["Games"] > 0,
+                (reg_grp["Wins"] + 0.5 * reg_grp["Ties"]) / reg_grp["Games"],
+                np.nan,
+            )
 
-        # Round1 pick per Owner-Year (earliest pick if multiple)
         d1 = df_round1.copy()
         d1["Pick"] = pd.to_numeric(d1["Pick"], errors="coerce")
         d1["Year"] = pd.to_numeric(d1["Year"], errors="coerce")
-        d1_grp = d1.dropna(subset=["Year", "Owner", "Pick"]).sort_values("Pick").groupby(["Owner", "Year"]).first().reset_index()
+        d1_grp = (
+            d1.dropna(subset=["Year", "Owner", "Pick"])
+            .sort_values("Pick")
+            .groupby(["Owner", "Year"])
+            .first()
+            .reset_index()
+        )
 
-    dv = pd.merge(d1_grp, reg_grp, on=["Owner", "Year"], how="inner")
-    dv = dv.dropna(subset=["Pick"]) 
-    if "WinPct" in dv.columns:
-            # Scatter: Pick vs Win%
-            fig_sc = px.scatter(
-                dv, x="Pick", y="WinPct", hover_data=["Owner", "Year", "Wins" if "Wins" in dv.columns else None],
-                trendline="ols", title="Round 1 Pick vs Regular-season Win%",
-                labels={"WinPct": "Win %"}
-            )
-            safe_chart(fig_sc)
+        dv = pd.merge(d1_grp, reg_grp, on=["Owner", "Year"], how="inner")
+        dv = dv.dropna(subset=["Pick"]).copy()
+        if "ActualMinusExpected" in dv.columns:
+            dv = dv.rename(columns={"ActualMinusExpected": "ActualVsExpected"})
 
-            # (Removed) Average Win% by Draft Position (quartiles) per user request
-
-            # (Removed) Rank correlation chart per user request
-
-            # Overall Win% per Draft Pick (across all years)
-            try:
-                pick_stats = dv.groupby("Pick").agg(
-                    AvgWinPct=("WinPct", "mean"),
-                    MedianWinPct=("WinPct", "median"),
-                    Samples=("WinPct", "count"),
-                ).reset_index()
-                fig_pick = px.bar(
-                    pick_stats.sort_values("Pick"), x="Pick", y="AvgWinPct",
-                    title="Average Win% by Draft Pick (all seasons)", labels={"AvgWinPct": "Win %"},
-                    text="Samples"
+        if dv.empty:
+            st.info("No overlapping draft and season results for the current filters.")
+        else:
+            if "WinPct" in dv.columns:
+                fig_sc = px.scatter(
+                    dv,
+                    x="Pick",
+                    y="WinPct",
+                    hover_data=["Owner", "Year", "Wins" if "Wins" in dv.columns else None],
+                    trendline="ols",
+                    title="Round 1 Pick vs Regular-season Win%",
+                    labels={"WinPct": "Win %"},
                 )
-                fig_pick.update_traces(textposition="outside", cliponaxis=False)
-                safe_chart(fig_pick)
+                safe_chart(fig_sc)
+
+                try:
+                    pick_stats = dv.groupby("Pick").agg(
+                        AvgWinPct=("WinPct", "mean"),
+                        MedianWinPct=("WinPct", "median"),
+                        Samples=("WinPct", "count"),
+                    ).reset_index()
+                    fig_pick = px.bar(
+                        pick_stats.sort_values("Pick"),
+                        x="Pick",
+                        y="AvgWinPct",
+                        title="Average Win% by Draft Pick (all seasons)",
+                        labels={"AvgWinPct": "Win %"},
+                        text="Samples",
+                    )
+                    fig_pick.update_traces(textposition="outside", cliponaxis=False)
+                    safe_chart(fig_pick)
+                except Exception:
+                    pass
+
+            if "Seed" in dv.columns:
+                fig_seed = px.scatter(
+                    dv,
+                    x="Pick",
+                    y="Seed",
+                    hover_data=["Owner", "Year", "WinPct" if "WinPct" in dv.columns else None],
+                    trendline="ols",
+                    title="Round 1 Pick vs final seed",
+                    labels={"Seed": "Final seed (lower is better)"},
+                )
+                fig_seed.update_yaxes(autorange="reversed")
+                safe_chart(fig_seed)
+
+            correlation_rows: List[Dict[str, float | str]] = []
+            for metric, label in [
+                ("WinPct", "Win %"),
+                ("Seed", "Final seed"),
+                ("PointsFor", "Points for"),
+                ("PointsAgainst", "Points against"),
+                ("ActualVsExpected", "Actual vs expected"),
+            ]:
+                if metric in dv.columns and dv[metric].notna().sum() >= 3:
+                    pearson = dv["Pick"].corr(dv[metric])
+                    pick_rank = dv["Pick"].rank(method="average")
+                    metric_rank = dv[metric].rank(method="average")
+                    spearman = pick_rank.corr(metric_rank)
+                    if pd.notna(pearson) or pd.notna(spearman):
+                        correlation_rows.append({
+                            "Metric": label,
+                            "Pearson": round(float(pearson), 3) if pd.notna(pearson) else None,
+                            "Spearman": round(float(spearman), 3) if pd.notna(spearman) else None,
+                            "Samples": int(dv[metric].notna().sum()),
+                        })
+            if correlation_rows:
+                corr_df = pd.DataFrame(correlation_rows)
+                st.markdown("#### Draft capital correlations")
+                st.dataframe(corr_df, use_container_width=True, hide_index=True)
+
+            try:
+                tiers = min(4, dv["Pick"].nunique())
+                if tiers > 1:
+                    dv["PickTier"] = pd.qcut(dv["Pick"], q=tiers, duplicates="drop")
+                    agg_map: Dict[str, Tuple[str, str]] = {"Seasons": ("Pick", "count")}
+                    if "WinPct" in dv.columns:
+                        agg_map["AvgWinPct"] = ("WinPct", "mean")
+                    if "Seed" in dv.columns:
+                        agg_map["AvgSeed"] = ("Seed", "mean")
+                    if "ActualVsExpected" in dv.columns:
+                        agg_map["AvgActualVsExpected"] = ("ActualVsExpected", "mean")
+                    tier_summary = dv.groupby("PickTier").agg(**agg_map).reset_index()
+                    display_cols = ["PickTier", "Seasons"]
+                    if "AvgWinPct" in tier_summary.columns:
+                        tier_summary["AvgWinPct"] = tier_summary["AvgWinPct"].round(3)
+                        display_cols.append("AvgWinPct")
+                    if "AvgSeed" in tier_summary.columns:
+                        tier_summary["AvgSeed"] = tier_summary["AvgSeed"].round(2)
+                        display_cols.append("AvgSeed")
+                    if "AvgActualVsExpected" in tier_summary.columns:
+                        tier_summary["AvgActualVsExpected"] = tier_summary["AvgActualVsExpected"].round(2)
+                        display_cols.append("AvgActualVsExpected")
+                    st.markdown("#### Outcomes by draft capital quartile")
+                    st.dataframe(tier_summary[display_cols], use_container_width=True, hide_index=True)
             except Exception:
                 pass
 
+            if "ActualVsExpected" in dv.columns and dv["ActualVsExpected"].notna().any():
+                st.markdown("#### Draft hits and misses")
+                over = dv.dropna(subset=["ActualVsExpected"]).sort_values("ActualVsExpected", ascending=False).head(10)
+                under = dv.dropna(subset=["ActualVsExpected"]).sort_values("ActualVsExpected", ascending=True).head(10)
+                if not over.empty:
+                    st.caption("Top 10 seasons outperforming expected points")
+                    st.dataframe(
+                        over[[c for c in ["Year", "Owner", "Pick", "ActualVsExpected", "WinPct"] if c in over.columns]].round({"ActualVsExpected": 2, "WinPct": 3}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                if not under.empty:
+                    st.caption("Top 10 seasons underperforming expected points")
+                    st.dataframe(
+                        under[[c for c in ["Year", "Owner", "Pick", "ActualVsExpected", "WinPct"] if c in under.columns]].round({"ActualVsExpected": 2, "WinPct": 3}),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+    else:
+        st.info("Need regular-season results to pair with draft data.")
 
-def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
+
+def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners, df_reg: Optional[pd.DataFrame] = None):
     st.subheader("Head-to-Head & Game Log")
     if df_gl is None or df_gl.empty:
         st.info("gamelog sheet not found or empty.")
@@ -2832,6 +3549,41 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
 
     df = compute_winner_team(df_gl)
     df = apply_year_team_owner_filters(df, selected_years, selected_teams, selected_owners)
+
+    season_records: Optional[pd.DataFrame] = None
+    if df_reg is not None and not df_reg.empty:
+        try:
+            reg_filtered = apply_year_team_owner_filters(df_reg, selected_years, selected_teams, selected_owners)
+            if reg_filtered is not None and not reg_filtered.empty:
+                reg = reg_filtered.copy()
+                reg["Year"] = pd.to_numeric(reg.get("Year"), errors="coerce")
+                for col in ["Wins", "Losses", "T", "Ties"]:
+                    if col in reg.columns:
+                        reg[col] = pd.to_numeric(reg[col], errors="coerce").fillna(0)
+                ties_col = "T" if "T" in reg.columns else ("Ties" if "Ties" in reg.columns else None)
+                if ties_col and ties_col not in ["T", "Ties"]:
+                    reg["Ties"] = reg[ties_col]
+                elif ties_col is None:
+                    reg["Ties"] = 0
+                reg["Wins"] = pd.to_numeric(reg.get("Wins"), errors="coerce").fillna(0)
+                reg["Losses"] = pd.to_numeric(reg.get("Losses"), errors="coerce").fillna(0)
+                reg["Ties"] = pd.to_numeric(reg.get("Ties"), errors="coerce").fillna(0)
+                agg_rec = reg.dropna(subset=["Owner", "Year"]).groupby(["Owner", "Year"], as_index=False).agg(
+                    Wins=("Wins", "sum"),
+                    Losses=("Losses", "sum"),
+                    Ties=("Ties", "sum"),
+                )
+                agg_rec["Games"] = agg_rec["Wins"] + agg_rec["Losses"] + agg_rec["Ties"]
+                agg_rec["WinPct"] = np.where(
+                    agg_rec["Games"] > 0,
+                    (agg_rec["Wins"] + 0.5 * agg_rec["Ties"]) / agg_rec["Games"],
+                    np.nan,
+                )
+                season_records = agg_rec[["Owner", "Year", "WinPct"]]
+        except Exception:
+            season_records = None
+
+    story_cards: List[Dict[str, object]] = []
 
     # Runtime fallback: alias legacy owner columns to normalized names if needed
     if "HomeOwner" not in df.columns:
@@ -2864,6 +3616,108 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             df["HomeScore"] = pd.to_numeric(df[a_pts], errors="coerce")
             df["AwayScore"] = pd.to_numeric(df[b_pts], errors="coerce")
 
+    # Story card derivation (upset, high-scoring loss, revenge)
+    required_story_cols = {"Year", "Week", "HomeOwner", "AwayOwner", "HomeScore", "AwayScore"}
+    if required_story_cols.issubset(df.columns):
+        games = df.dropna(subset=["HomeOwner", "AwayOwner", "HomeScore", "AwayScore"]).copy()
+        if not games.empty:
+            games["Year"] = pd.to_numeric(games["Year"], errors="coerce")
+            games["Week"] = pd.to_numeric(games["Week"], errors="coerce")
+            games["HomeScore"] = pd.to_numeric(games["HomeScore"], errors="coerce")
+            games["AwayScore"] = pd.to_numeric(games["AwayScore"], errors="coerce")
+            games = games.dropna(subset=["Year", "Week", "HomeScore", "AwayScore"])
+            if not games.empty:
+                games["WinnerOwner"] = games.get("WinnerOwner")
+                games["LoserOwner"] = np.nan
+                games["WinnerScore"] = np.nan
+                games["LoserScore"] = np.nan
+                games["Margin"] = np.nan
+                # Compute winner/loser when ties are absent
+                home_win_mask = games["HomeScore"] > games["AwayScore"]
+                away_win_mask = games["AwayScore"] > games["HomeScore"]
+                tie_mask = ~(home_win_mask | away_win_mask)
+                if "WinnerOwner" not in games.columns or games["WinnerOwner"].isna().all():
+                    games.loc[home_win_mask, "WinnerOwner"] = games.loc[home_win_mask, "HomeOwner"]
+                    games.loc[away_win_mask, "WinnerOwner"] = games.loc[away_win_mask, "AwayOwner"]
+                games.loc[home_win_mask, "LoserOwner"] = games.loc[home_win_mask, "AwayOwner"]
+                games.loc[away_win_mask, "LoserOwner"] = games.loc[away_win_mask, "HomeOwner"]
+                games.loc[home_win_mask, "WinnerScore"] = games.loc[home_win_mask, "HomeScore"]
+                games.loc[away_win_mask, "WinnerScore"] = games.loc[away_win_mask, "AwayScore"]
+                games.loc[home_win_mask, "LoserScore"] = games.loc[home_win_mask, "AwayScore"]
+                games.loc[away_win_mask, "LoserScore"] = games.loc[away_win_mask, "HomeScore"]
+                games.loc[home_win_mask | away_win_mask, "Margin"] = (
+                    games.loc[home_win_mask | away_win_mask, "WinnerScore"]
+                    - games.loc[home_win_mask | away_win_mask, "LoserScore"]
+                )
+                games.loc[home_win_mask | away_win_mask, "TotalPoints"] = (
+                    games.loc[home_win_mask | away_win_mask, "HomeScore"]
+                    + games.loc[home_win_mask | away_win_mask, "AwayScore"]
+                )
+
+                played_games = games[~tie_mask].dropna(subset=["WinnerOwner", "LoserOwner", "WinnerScore", "LoserScore"])
+                if not played_games.empty:
+                    played_games = played_games.sort_values(["Year", "Week"]).reset_index(drop=True)
+
+                    # Biggest upset (season win% context)
+                    if season_records is not None and not season_records.empty:
+                        lookup = season_records.set_index(["Owner", "Year"])["WinPct"].to_dict()
+                        played_games["WinnerSeasonWinPct"] = played_games.apply(
+                            lambda r: lookup.get((r["WinnerOwner"], r["Year"])), axis=1
+                        )
+                        played_games["LoserSeasonWinPct"] = played_games.apply(
+                            lambda r: lookup.get((r["LoserOwner"], r["Year"])), axis=1
+                        )
+                        upset_candidates = played_games.dropna(subset=["WinnerSeasonWinPct", "LoserSeasonWinPct", "Margin"])
+                        if not upset_candidates.empty:
+                            upset_candidates["UpsetDelta"] = upset_candidates["WinnerSeasonWinPct"] - upset_candidates["LoserSeasonWinPct"]
+                            upset_row = upset_candidates.loc[upset_candidates["UpsetDelta"].idxmin()]
+                            if upset_row["UpsetDelta"] < 0:
+                                story_cards.append(
+                                    {
+                                        "title": "Biggest upset",
+                                        "headline": f"{upset_row['WinnerOwner']} upset {upset_row['LoserOwner']} by {upset_row['Margin']:.1f} in Week {int(upset_row['Week'])} ({int(upset_row['Year'])})",
+                                        "sub": f"Season win%: {upset_row['WinnerSeasonWinPct']:.3f} vs {upset_row['LoserSeasonWinPct']:.3f} ({upset_row['UpsetDelta']:+.3f})",
+                                    }
+                                )
+
+                    # High-scoring loss
+                    high_loss = played_games.loc[played_games["LoserScore"].idxmax()] if not played_games.empty else None
+                    if high_loss is not None and pd.notna(high_loss["LoserScore"]):
+                        story_cards.append(
+                            {
+                                "title": "High-scoring heartbreak",
+                                "headline": f"{high_loss['LoserOwner']} dropped {high_loss['LoserScore']:.1f} but fell to {high_loss['WinnerOwner']} {high_loss['WinnerScore']:.1f}-{high_loss['LoserScore']:.1f}",
+                                "sub": f"Week {int(high_loss['Week'])} ({int(high_loss['Year'])}) | Combined {high_loss['TotalPoints']:.1f} pts",
+                            }
+                        )
+
+                    # Revenge win (flip result from prior meeting)
+                    revenge_best: Optional[Dict[str, object]] = None
+                    last_result: Dict[Tuple[str, str], Dict[str, object]] = {}
+                    for _, row in played_games.iterrows():
+                        key = tuple(sorted([str(row["WinnerOwner"]), str(row["LoserOwner"])]) )
+                        prev = last_result.get(key)
+                        if prev is not None and prev.get("winner") != row["WinnerOwner"]:
+                            margin = row.get("Margin")
+                            if margin is None or pd.isna(margin):
+                                margin = 0.0
+                            candidate = {
+                                "title": "Revenge secured",
+                                "headline": f"{row['WinnerOwner']} avenged a loss vs {row['LoserOwner']} with a {margin:.1f}-pt win",
+                                "sub": f"Latest: Week {int(row['Week'])} ({int(row['Year'])}); previous meeting {prev.get('week_label')}",
+                                "margin": margin,
+                            }
+                            if revenge_best is None or margin > revenge_best.get("margin", -np.inf):
+                                revenge_best = candidate
+                        last_result[key] = {
+                            "winner": row["WinnerOwner"],
+                            "week_label": f"Week {int(row['Week'])} ({int(row['Year'])})",
+                        }
+                    if revenge_best is not None:
+                        story_cards.append(
+                            {k: v for k, v in revenge_best.items() if k != "margin"}
+                        )
+
     st.markdown("### Head-to-Head (Owners)")
     # Debug expander removed for clean UI
     subset_df = None
@@ -2877,6 +3731,16 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             subset_df = subset
     else:
         st.info("Owner columns not found in gamelog.")
+
+    if story_cards:
+        st.markdown("### Matchup story cards")
+        cols = st.columns(len(story_cards))
+        for col, card in zip(cols, story_cards):
+            with col:
+                st.markdown(f"**{card['title']}**")
+                st.write(card.get("headline", ""))
+                if card.get("sub"):
+                    st.caption(card["sub"])
 
     st.markdown("### Game Log")
     table_df = subset_df if subset_df is not None else df
@@ -2908,21 +3772,27 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
         d = d.dropna(subset=["HomeOwner", "AwayOwner", "HomeScore", "AwayScore"]).copy()
         if not d.empty:
             # Long form: one row per owner perspective per game
-            home = d[["HomeOwner", "AwayOwner", "HomeScore", "AwayScore"]].copy()
-            home.columns = ["Owner", "Opponent", "PF", "PA"]
+            home = d[["Year", "Week", "HomeOwner", "AwayOwner", "HomeScore", "AwayScore"]].copy()
+            home.columns = ["Year", "Week", "Owner", "Opponent", "PF", "PA"]
             home["Win"] = (home["PF"] > home["PA"]).astype(int)
             home["Loss"] = (home["PF"] < home["PA"]).astype(int)
             home["Tie"] = (home["PF"] == home["PA"]).astype(int)
 
-            away = d[["AwayOwner", "HomeOwner", "AwayScore", "HomeScore"]].copy()
-            away.columns = ["Owner", "Opponent", "PF", "PA"]
+            away = d[["Year", "Week", "AwayOwner", "HomeOwner", "AwayScore", "HomeScore"]].copy()
+            away.columns = ["Year", "Week", "Owner", "Opponent", "PF", "PA"]
             away["Win"] = (away["PF"] > away["PA"]).astype(int)
             away["Loss"] = (away["PF"] < away["PA"]).astype(int)
             away["Tie"] = (away["PF"] == away["PA"]).astype(int)
 
             long_df = pd.concat([home, away], ignore_index=True)
+            long_df["Year"] = pd.to_numeric(long_df["Year"], errors="coerce")
+            long_df["Week"] = pd.to_numeric(long_df["Week"], errors="coerce")
             # Remove self-matches just in case
             long_df = long_df[long_df["Owner"].astype(str) != long_df["Opponent"].astype(str)]
+            long_df["Result"] = np.where(
+                long_df["PF"] > long_df["PA"], "W",
+                np.where(long_df["PF"] < long_df["PA"], "L", "T")
+            )
             # Aggregate by Owner vs Opponent
             agg = long_df.groupby(["Owner", "Opponent"]).agg(
                 Games=("Win", "count"),
@@ -2953,6 +3823,159 @@ def render_head_to_head(df_gl, selected_years, selected_teams, selected_owners):
             # Sort by Owner then Opponent (and games desc within owner)
             agg = agg.sort_values(["Owner", "Games", "Opponent"], ascending=[True, False, True])
             st.dataframe(agg[cols], use_container_width=True, hide_index=True)
+
+            streak_input = long_df.dropna(subset=["Year", "Week"]).copy()
+            if not streak_input.empty:
+                streak_input = streak_input.sort_values(["Owner", "Opponent", "Year", "Week"]).reset_index(drop=True)
+                streak_rows: List[Dict[str, object]] = []
+                for (owner, opponent), group in streak_input.groupby(["Owner", "Opponent"]):
+                    results = group["Result"].astype(str).tolist()
+                    if not results:
+                        continue
+                    last_result = results[-1]
+                    length = 0
+                    for res in reversed(results):
+                        if res == last_result:
+                            length += 1
+                        else:
+                            break
+                    if last_result == "W":
+                        outcome = "Win"
+                        word = "win"
+                    elif last_result == "L":
+                        outcome = "Loss"
+                        word = "loss"
+                    else:
+                        outcome = "Tie"
+                        word = "tie"
+                    plural = "es" if word == "loss" and length != 1 else ("s" if length != 1 else "")
+                    descriptor = f"{length} {word}{plural}" if outcome != "Tie" else f"{length} tie{'s' if length != 1 else ''}"
+                    last_game = group.iloc[-1]
+                    last_year = int(last_game["Year"]) if pd.notna(last_game["Year"]) else None
+                    last_week = int(last_game["Week"]) if pd.notna(last_game["Week"]) else None
+                    streak_rows.append({
+                        "Owner": owner,
+                        "Opponent": opponent,
+                        "CurrentOutcome": outcome,
+                        "CurrentStreakLength": length,
+                        "CurrentStreak": descriptor,
+                        "LastGame": f"{last_year} W{last_week}" if last_year is not None and last_week is not None else None,
+                    })
+                if streak_rows:
+                    streak_df = pd.DataFrame(streak_rows)
+                    streak_df = streak_df.sort_values(["CurrentStreakLength", "Owner", "Opponent"], ascending=[False, True, True])
+                    st.markdown("#### Current head-to-head streaks")
+                    st.dataframe(
+                        streak_df[[
+                            "Owner",
+                            "Opponent",
+                            "CurrentOutcome",
+                            "CurrentStreakLength",
+                            "CurrentStreak",
+                            "LastGame",
+                        ]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+            try:
+                rivalry_source = long_df.copy()
+                rivalry_source["Owner"] = rivalry_source["Owner"].astype(str)
+                rivalry_source["Opponent"] = rivalry_source["Opponent"].astype(str)
+                rivalry_source["PairKey"] = rivalry_source.apply(
+                    lambda r: tuple(sorted([r["Owner"], r["Opponent"]])), axis=1
+                )
+
+                def _pair_stats(group: pd.DataFrame) -> Optional[pd.Series]:
+                    owners = sorted(group["Owner"].unique())
+                    if len(owners) != 2:
+                        return None
+                    owner_a, owner_b = owners
+                    a_rows = group[group["Owner"] == owner_a]
+                    b_rows = group[group["Owner"] == owner_b]
+                    wins_a = int(a_rows["Win"].sum())
+                    wins_b = int(b_rows["Win"].sum())
+                    ties = int(a_rows["Tie"].sum())
+                    games = wins_a + wins_b + ties
+                    if games == 0:
+                        return None
+                    pf_a = float(a_rows["PF"].sum())
+                    pf_b = float(b_rows["PF"].sum())
+                    return pd.Series(
+                        {
+                            "OwnerA": owner_a,
+                            "OwnerB": owner_b,
+                            "Games": games,
+                            "WinsA": wins_a,
+                            "WinsB": wins_b,
+                            "Ties": ties,
+                            "PointDiff": pf_a - pf_b,
+                            "AvgMargin": (pf_a - pf_b) / games,
+                        }
+                    )
+
+                pair_summary = (
+                    rivalry_source.groupby("PairKey").apply(_pair_stats).dropna().reset_index(drop=True)
+                )
+                if not pair_summary.empty:
+                    pair_summary["Series"] = pair_summary.apply(
+                        lambda r: f"{r['OwnerA']} {int(r['WinsA'])}-{int(r['WinsB'])}-{int(r['Ties'])} {r['OwnerB']}",
+                        axis=1,
+                    )
+                    pair_summary["AvgMargin"] = pair_summary["AvgMargin"].round(2)
+                    pair_summary["PointDiff"] = pair_summary["PointDiff"].round(1)
+                    rivalry = pair_summary.sort_values(
+                        ["Games", "AvgMargin"], ascending=[False, True]
+                    ).head(10)
+                    st.markdown("#### Rivalry spotlight")
+                    st.dataframe(
+                        rivalry[["OwnerA", "OwnerB", "Games", "Series", "AvgMargin", "PointDiff"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+            except Exception:
+                pass
+
+            try:
+                st.markdown("#### Head-to-head heatmaps")
+                tabs = st.tabs(["Win %", "Games played"])
+                owners = sorted(pd.unique(pd.concat([agg["Owner"], agg["Opponent"]]).astype(str)))
+                pivot_win = (
+                    agg.pivot(index="Owner", columns="Opponent", values="WinPct")
+                    .reindex(index=owners, columns=owners)
+                )
+                pivot_games = (
+                    agg.pivot(index="Owner", columns="Opponent", values="Games")
+                    .reindex(index=owners, columns=owners)
+                )
+                with tabs[0]:
+                    if pivot_win.notna().any().any():
+                        heat_win = px.imshow(
+                            pivot_win,
+                            color_continuous_scale="RdYlGn",
+                            aspect="auto",
+                            origin="lower",
+                            labels={"color": "Win %"},
+                        )
+                        heat_win.update_layout(margin={"l": 60, "r": 20, "t": 40, "b": 40})
+                        safe_chart(heat_win)
+                    else:
+                        st.info("No win percentage data to plot.")
+                with tabs[1]:
+                    if pivot_games.notna().any().any():
+                        heat_games = px.imshow(
+                            pivot_games,
+                            color_continuous_scale="Blues",
+                            aspect="auto",
+                            origin="lower",
+                            labels={"color": "Games"},
+                        )
+                        heat_games.update_layout(margin={"l": 60, "r": 20, "t": 40, "b": 40})
+                        safe_chart(heat_games)
+                    else:
+                        st.info("No matchup counts to plot.")
+            except Exception:
+                pass
         else:
             st.info("No complete owner matchup rows found for the current filters.")
     else:
@@ -3261,6 +4284,8 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
                 return snapshots[-2][1]
             return {}
 
+    details = pd.DataFrame(rows)
+
     # Leaderboard
     lb = pd.DataFrame([
         {"Owner": k, "Elo": v, **tally.get(k, {"Games": 0, "Wins": 0, "Losses": 0, "Ties": 0})}
@@ -3295,6 +4320,18 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
     lb["WinPct"] = lb["WinPct"].round(3)
 
     st.markdown("### Current Elo leaderboard")
+    owner_options = ["All owners"] + lb["Owner"].sort_values().tolist()
+    owner_filter = st.multiselect(
+        "Filter owners",
+        options=owner_options,
+        default=["All owners"],
+    )
+    if owner_filter and "All owners" not in owner_filter:
+        lb = lb[lb["Owner"].isin(owner_filter)]
+    if lb.empty:
+        st.info("No owners match the selected filter.")
+        return
+
     top_n = min(12, len(lb))
     top12 = lb.head(top_n).reset_index(drop=True)
     top12["Rank"] = np.arange(1, len(top12) + 1)
@@ -3323,6 +4360,150 @@ def render_rating(df_gl, selected_years, selected_teams, selected_owners):
         if c in top12.columns
     ]
     st.dataframe(top12[cols], use_container_width=True, hide_index=True)
+
+    if not details.empty:
+        season_entries = []
+        base_cols = ["Year", "Week"]
+        for prefix, owner_col in [("A", "A"), ("B", "B")]:
+            take = details[[owner_col, *base_cols, f"{prefix}_elo_start", f"{prefix}_elo_end"]].copy()
+            take = take.rename(columns={
+                owner_col: "Owner",
+                f"{prefix}_elo_start": "EloStart",
+                f"{prefix}_elo_end": "EloEnd",
+            })
+            season_entries.append(take)
+        season_long = pd.concat(season_entries, ignore_index=True)
+        season_long["Season"] = pd.to_numeric(season_long["Year"], errors="coerce")
+        season_long["WeekNum"] = pd.to_numeric(season_long["Week"], errors="coerce")
+        season_long = season_long.dropna(subset=["Owner", "Season"])
+        if not season_long.empty:
+            if owner_filter and "All owners" not in owner_filter:
+                season_long = season_long[season_long["Owner"].isin(owner_filter)]
+            if season_long.empty:
+                st.info("No season snapshots for the selected owners.")
+                return
+            season_long = season_long.sort_values(["Owner", "Season", "WeekNum"], kind="mergesort")
+            season_summary = (
+                season_long.groupby(["Owner", "Season"], sort=False)
+                .agg(
+                    Games=("EloEnd", "size"),
+                    SeasonStartElo=("EloStart", "first"),
+                    SeasonEndElo=("EloEnd", "last"),
+                )
+                .reset_index()
+            )
+            season_summary["Season"] = season_summary["Season"].astype("Int64")
+            season_summary["SeasonStartElo"] = season_summary["SeasonStartElo"].round(2)
+            season_summary["SeasonEndElo"] = season_summary["SeasonEndElo"].round(2)
+            season_summary["SeasonChange"] = (season_summary["SeasonEndElo"] - season_summary["SeasonStartElo"]).round(2)
+            season_summary["StartRank"] = (
+                season_summary.groupby("Season")["SeasonStartElo"].rank(ascending=False, method="min")
+            ).astype("Int64")
+            season_summary["EndRank"] = (
+                season_summary.groupby("Season")["SeasonEndElo"].rank(ascending=False, method="min")
+            ).astype("Int64")
+            season_summary = season_summary.sort_values(["Season", "Owner"])
+            st.markdown("### Season Elo snapshots")
+            st.dataframe(
+                season_summary[[
+                    "Season",
+                    "Owner",
+                    "SeasonStartElo",
+                    "StartRank",
+                    "SeasonEndElo",
+                    "EndRank",
+                    "SeasonChange",
+                    "Games",
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            unique_seasons = sorted(season_long["Season"].dropna().astype(int).unique().tolist()) if "Season" in season_long.columns else []
+            if unique_seasons:
+                st.markdown("#### Season Elo trends")
+                default_seasons = unique_seasons[-4:] if len(unique_seasons) > 4 else unique_seasons
+                season_pick = st.multiselect(
+                    "Seasons to compare",
+                    options=unique_seasons,
+                    default=default_seasons,
+                    key="elo_season_compare",
+                )
+                if season_pick:
+                    rows_needed = max(1, (len(season_pick) + 2) // 3)
+                    view_mode = st.radio(
+                        "Trend view",
+                        ["Sparkline (weekly trajectory)", "Slope chart (start vs end)"],
+                        index=0,
+                        horizontal=True,
+                        key="elo_trend_view_mode",
+                    )
+                    trend_data = season_long[season_long["Season"].isin(season_pick)].copy()
+                    if view_mode.startswith("Sparkline"):
+                        trend_data = trend_data.dropna(subset=["WeekNum", "EloEnd"])
+                        if not trend_data.empty:
+                            trend_data["WeekNum"] = trend_data["WeekNum"].astype(int)
+                            spark = px.line(
+                                trend_data,
+                                x="WeekNum",
+                                y="EloEnd",
+                                color="Owner",
+                                facet_col="Season",
+                                facet_col_wrap=3,
+                                markers=True,
+                                title="Weekly Elo trajectory",
+                                labels={"WeekNum": "Week", "EloEnd": "Elo"},
+                            )
+                            spark.update_layout(
+                                legend_title="Owner",
+                                height=320 * rows_needed,
+                                margin={"t": 60, "l": 40, "r": 20},
+                            )
+                            if spark.layout.annotations:
+                                for ann in spark.layout.annotations:
+                                    ann.text = f"Season {ann.text.split('=')[-1]}"
+                            safe_chart(spark)
+                        else:
+                            st.info("No weekly Elo samples for the selected seasons.")
+                    else:
+                        slope_base = season_summary[season_summary["Season"].isin(season_pick)].copy()
+                        if not slope_base.empty:
+                            slope_long = slope_base.melt(
+                                id_vars=["Owner", "Season", "SeasonChange", "StartRank", "EndRank"],
+                                value_vars=["SeasonStartElo", "SeasonEndElo"],
+                                var_name="Stage",
+                                value_name="Elo",
+                            )
+                            stage_map = {"SeasonStartElo": "Start", "SeasonEndElo": "End"}
+                            slope_long["Stage"] = slope_long["Stage"].map(stage_map)
+                            slope_long = slope_long.dropna(subset=["Elo", "Stage"])
+                            if not slope_long.empty:
+                                slope_fig = px.line(
+                                    slope_long,
+                                    x="Stage",
+                                    y="Elo",
+                                    color="Owner",
+                                    facet_col="Season",
+                                    facet_col_wrap=3,
+                                    markers=True,
+                                    title="Season opening vs closing Elo",
+                                    labels={"Elo": "Elo"},
+                                )
+                                slope_fig.update_layout(
+                                    legend_title="Owner",
+                                    height=320 * rows_needed,
+                                    margin={"t": 60, "l": 40, "r": 20},
+                                )
+                                if slope_fig.layout.annotations:
+                                    for ann in slope_fig.layout.annotations:
+                                        ann.text = f"Season {ann.text.split('=')[-1]}"
+                                safe_chart(slope_fig)
+                            else:
+                                st.info("Not enough Elo snapshots to plot slope chart.")
+                        else:
+                            st.info("No season snapshots within the selected range.")
+                else:
+                    st.info("Pick at least one season to compare Elo trends.")
 
     # Timeline chart for selected entries
     st.markdown("### Rating timeline")
@@ -3711,7 +4892,7 @@ def main():
     with tabs[1]:
         render_championships(df_ch, selected_years, selected_teams, selected_owners)
     with tabs[2]:
-        render_regular_season(df_reg, selected_years, selected_teams, selected_owners)
+        render_regular_season(df_reg, selected_years, selected_teams, selected_owners, df_gl)
     with tabs[3]:
         render_rating(df_gl, selected_years, selected_teams, selected_owners)
     with tabs[4]:
@@ -3719,7 +4900,7 @@ def main():
     with tabs[5]:
         render_draft(df_draft, df_to, df_reg, selected_years, selected_teams, selected_owners, file_path)
     with tabs[6]:
-        render_head_to_head(df_gl, selected_years, selected_teams, selected_owners)
+        render_head_to_head(df_gl, selected_years, selected_teams, selected_owners, df_reg)
     with tabs[7]:
         render_teams_owners(df_to, selected_years, selected_teams, selected_owners)
 
